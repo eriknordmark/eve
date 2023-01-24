@@ -123,6 +123,7 @@ func (c *AdapterConfigurator) Create(ctx context.Context, item depgraph.Item) er
 			c.Log.Error(err)
 			return err
 		}
+		c.setSysctls(adapter.IfName)
 		return nil
 	}
 	kernIfname := "k" + adapter.IfName
@@ -170,6 +171,7 @@ func (c *AdapterConfigurator) Create(ctx context.Context, item depgraph.Item) er
 		c.Log.Error(err)
 		return err
 	}
+	c.setSysctls(adapter.IfName)
 	// ip link set kethN master ethN
 	if err := netlink.LinkSetMaster(kernLink, bridge); err != nil {
 		err = fmt.Errorf("netlink.LinkSetMaster(%s, %s) failed: %v",
@@ -184,6 +186,39 @@ func (c *AdapterConfigurator) Create(ctx context.Context, item depgraph.Item) er
 		return err
 	}
 	return nil
+}
+
+func (c *AdapterConfigurator) setSysctls(ifName string) {
+	sysctlSetting := fmt.Sprintf("net.ipv6.conf.%s.stable_secret=ff::0",
+		ifName)
+	args := []string{"-w", sysctlSetting}
+	c.Log.Noticef("Calling command %s %v", "sysctl", args)
+	out, err := base.Exec(c.Log, "sysctl", args...).CombinedOutput()
+	if err != nil {
+		errStr := fmt.Sprintf("sysctl command %s failed %s output %s",
+			args, err, out)
+		c.Log.Errorln(errStr)
+	}
+	sysctlSetting = fmt.Sprintf("net.ipv6.conf.%s.accept_ra=2",
+		ifName)
+	args = []string{"-w", sysctlSetting}
+	c.Log.Noticef("Calling command %s %v", "sysctl", args)
+	out, err = base.Exec(c.Log, "sysctl", args...).CombinedOutput()
+	if err != nil {
+		errStr := fmt.Sprintf("sysctl command %s failed %s output %s",
+			args, err, out)
+		c.Log.Errorln(errStr)
+	}
+	sysctlSetting = fmt.Sprintf("net.ipv6.conf.%s.addr_gen_mode=2",
+		ifName)
+	args = []string{"-w", sysctlSetting}
+	c.Log.Noticef("Calling command %s %v", "sysctl", args)
+	out, err = base.Exec(c.Log, "sysctl", args...).CombinedOutput()
+	if err != nil {
+		errStr := fmt.Sprintf("sysctl command %s failed %s output %s",
+			args, err, out)
+		c.Log.Errorln(errStr)
+	}
 }
 
 func (c *AdapterConfigurator) createBridge(ifName string) bool {
