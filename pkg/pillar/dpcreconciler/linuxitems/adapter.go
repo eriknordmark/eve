@@ -117,6 +117,7 @@ func (c *AdapterConfigurator) Create(ctx context.Context, item depgraph.Item) er
 		// Just make sure that the interface is UP.
 		c.Log.Noticef("Not creating bridge for interface: %s, link type: %s",
 			adapter.IfName, link.Type())
+		c.setSysctls(adapter.IfName)
 		if err := netlink.LinkSetUp(link); err != nil {
 			err = fmt.Errorf("netlink.LinkSetUp(%s) failed: %v",
 				adapter.IfName, err)
@@ -126,6 +127,9 @@ func (c *AdapterConfigurator) Create(ctx context.Context, item depgraph.Item) er
 		c.setSysctls(adapter.IfName)
 		return nil
 	}
+	// Set sysctls on what will become kernIfname
+	c.setSysctls(adapter.IfName)
+
 	kernIfname := "k" + adapter.IfName
 	_, err = netlink.LinkByName(kernIfname)
 	if err == nil {
@@ -163,6 +167,7 @@ func (c *AdapterConfigurator) Create(ctx context.Context, item depgraph.Item) er
 		c.Log.Error(err)
 		return err
 	}
+	c.setSysctls(adapter.IfName)
 	// Look up again after rename
 	kernLink, err := netlink.LinkByName(kernIfname)
 	if err != nil {
@@ -171,7 +176,6 @@ func (c *AdapterConfigurator) Create(ctx context.Context, item depgraph.Item) er
 		c.Log.Error(err)
 		return err
 	}
-	c.setSysctls(adapter.IfName)
 	// ip link set kethN master ethN
 	if err := netlink.LinkSetMaster(kernLink, bridge); err != nil {
 		err = fmt.Errorf("netlink.LinkSetMaster(%s, %s) failed: %v",
@@ -179,21 +183,34 @@ func (c *AdapterConfigurator) Create(ctx context.Context, item depgraph.Item) er
 		c.Log.Error(err)
 		return err
 	}
+	// One more time?
+	c.setSysctls(adapter.IfName)
 	if err := netlink.LinkSetUp(bridge); err != nil {
 		err = fmt.Errorf("netlink.LinkSetUp(%s) failed: %v",
 			adapter.IfName, err)
 		c.Log.Error(err)
 		return err
 	}
+	c.setSysctls(adapter.IfName)
 	return nil
 }
 
 func (c *AdapterConfigurator) setSysctls(ifName string) {
-	sysctlSetting := fmt.Sprintf("net.ipv6.conf.%s.stable_secret=ff::0",
+	sysctlSetting := fmt.Sprintf("net.ipv6.conf.%s.use_tempaddr=0",
 		ifName)
 	args := []string{"-w", sysctlSetting}
 	c.Log.Noticef("Calling command %s %v", "sysctl", args)
 	out, err := base.Exec(c.Log, "sysctl", args...).CombinedOutput()
+	if err != nil {
+		errStr := fmt.Sprintf("sysctl command %s failed %s output %s",
+			args, err, out)
+		c.Log.Errorln(errStr)
+	}
+	sysctlSetting = fmt.Sprintf("net.ipv6.conf.%s.stable_secret=ff::0",
+		ifName)
+	args = []string{"-w", sysctlSetting}
+	c.Log.Noticef("Calling command %s %v", "sysctl", args)
+	out, err = base.Exec(c.Log, "sysctl", args...).CombinedOutput()
 	if err != nil {
 		errStr := fmt.Sprintf("sysctl command %s failed %s output %s",
 			args, err, out)
