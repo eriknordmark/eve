@@ -448,8 +448,12 @@ else
     echo "$(date -Ins -u) Using existing device key pair"
 fi
 while [ ! -s $CONFIGDIR/server ] || [ ! -s $CONFIGDIR/root-certificate.pem ]; do
-    echo "$(date -Ins -u) No server or root-certificate to connect to. Wait for them" | tee /dev/console
-    sleep 10
+    if ! [ -f /opt/zededa/bin/run-fdo.sh ]; then
+        echo "$(date -Ins -u) No server or root-certificate to connect to. Done" | tee /dev/console
+        exit 0
+    fi
+    echo "$(date -Ins -u) No server or root-certificate to connect to. Run FDO" | tee /dev/console
+    /opt/zededa/bin/run-fdo.sh | tee /dev/console
 done
 
 if [ -c $TPM_DEVICE_PATH ] && ! [ -f $DEVICE_KEY_NAME ]; then
