@@ -91,6 +91,7 @@ func removeAIStatus(ctx *zedmanagerContext, status *types.AppInstanceStatus) {
 		log.Functionf("removeAIStatus(%s) remove done", uuidStr)
 		// Write out what we modified to AppInstanceStatus aka delete
 		unpublishAppInstanceStatus(ctx, status)
+		unpublishSavedAppInstanceConfig(ctx, status.Key())
 		return
 	}
 	log.Functionf("removeAIStatus(%s): PurgeInprogress RecreateVolumes",
@@ -203,7 +204,8 @@ func doUpdate(ctx *zedmanagerContext,
 	}
 
 	effectiveActivate := effectiveActivateCurrentProfile(config, ctx.currentProfile)
-
+	log.Noticef("XXX config.Activate %t effectiveActivate %t",
+		config.Activate, effectiveActivate)
 	if !effectiveActivate {
 		if status.Activated || status.ActivateInprogress {
 			c := doInactivateHalt(ctx, config, status)
@@ -217,6 +219,7 @@ func doUpdate(ctx *zedmanagerContext,
 			if status.State == types.INSTALLED || status.State == types.START_DELAYED {
 				status.State = types.HALTED
 				changed = true
+				unpublishSavedAppInstanceConfig(ctx, status.Key())
 			}
 		}
 		log.Functionf("Waiting for config.Activate for %s", uuidStr)
@@ -422,6 +425,9 @@ func doInstall(ctx *zedmanagerContext,
 		}
 	}
 	// Determine minimum state and errors across all of VolumeRefStatus
+	// Propagate state and errors to AppInstanceStatus
+	// unless this is an update/purge and app is already running
+
 	minState := types.MAXSTATE
 	for _, vrs := range status.VolumeRefStatusList {
 		if vrs.State < minState {
@@ -445,35 +451,34 @@ func doInstall(ctx *zedmanagerContext,
 		minState = types.INITIAL
 	}
 	if status.State >= types.BOOTING {
-		// Leave unchanged
+		// Leave State and errors unchanged
 	} else {
 		status.State = minState
 		changed = true
-	}
 
-	if allErrors == "" {
-		status.ClearErrorWithSource()
-	} else if errorSource == nil {
-		status.SetError(allErrors, errorTime)
-	} else {
-		if retryCondition == "" {
-			// if no retry condition it is an error
-			severity = types.ErrorSeverityError
+		if allErrors == "" {
+			status.ClearErrorWithSource()
+		} else if errorSource == nil {
+			status.SetError(allErrors, errorTime)
+		} else {
+			if retryCondition == "" {
+				// if no retry condition it is an error
+				severity = types.ErrorSeverityError
+			}
+			description := types.ErrorDescription{
+				Error:               allErrors,
+				ErrorEntities:       entities,
+				ErrorSeverity:       severity,
+				ErrorRetryCondition: retryCondition,
+				ErrorTime:           errorTime,
+			}
+			status.SetErrorWithSourceAndDescription(description, errorSource)
 		}
-		description := types.ErrorDescription{
-			Error:               allErrors,
-			ErrorEntities:       entities,
-			ErrorSeverity:       severity,
-			ErrorRetryCondition: retryCondition,
-			ErrorTime:           errorTime,
+		if allErrors != "" {
+			log.Errorf("Volumemgr error for %s: %s", uuidStr, allErrors)
+			return changed, false
 		}
-		status.SetErrorWithSourceAndDescription(description, errorSource)
 	}
-	if allErrors != "" {
-		log.Errorf("Volumemgr error for %s: %s", uuidStr, allErrors)
-		return changed, false
-	}
-
 	if status.PurgeInprogress != types.DownloadAndVerify && status.PurgeInprogress != types.BringDown && minState < types.CREATED_VOLUME {
 		log.Functionf("Waiting for all new volumes for %s", uuidStr)
 		return changed, false
@@ -813,6 +818,13 @@ func doActivate(ctx *zedmanagerContext, uuidStr string,
 			status.State, ds.State)
 		status.State = ds.State
 		changed = true
+		switch status.State {
+		case types.RUNNING:
+			// Save what is running
+			publishSavedAppInstanceConfig(ctx, &config)
+		case types.HALTING, types.HALTED:
+			unpublishSavedAppInstanceConfig(ctx, status.Key())
+		}
 	}
 	// XXX compare with equal before setting changed?
 	status.IoAdapterList = ds.IoAdapterList
@@ -841,6 +853,7 @@ func doActivate(ctx *zedmanagerContext, uuidStr string,
 			status.RestartInprogress = types.NotInprogress
 			status.State = types.RUNNING
 			changed = true
+			publishSavedAppInstanceConfig(ctx, &config)
 		} else {
 			log.Functionf("RestartInprogress(%s) waiting for Activated",
 				status.Key())
@@ -853,6 +866,7 @@ func doActivate(ctx *zedmanagerContext, uuidStr string,
 			status.PurgeInprogress = types.NotInprogress
 			status.State = types.RUNNING
 			changed = true
+			publishSavedAppInstanceConfig(ctx, &config)
 		} else {
 			log.Functionf("PurgeInprogress(%s) waiting for Activated",
 				status.Key())
@@ -910,6 +924,8 @@ func purgeCmdDone(ctx *zedmanagerContext, config types.AppInstanceConfig,
 		log.Errorf("Failed to update persisted purge counter for app %s-%s: %v",
 			config.DisplayName, config.UUIDandVersion.UUID, err)
 	}
+	// XXX did we already do this when we set RUNNING?
+	publishSavedAppInstanceConfig(ctx, &config)
 	return changed
 }
 
@@ -1180,6 +1196,13 @@ func doInactivateHalt(ctx *zedmanagerContext,
 			status.State, ds.State)
 		status.State = ds.State
 		changed = true
+		switch status.State {
+		case types.RUNNING:
+			// Save what is running
+			publishSavedAppInstanceConfig(ctx, &config)
+		case types.HALTING, types.HALTED:
+			unpublishSavedAppInstanceConfig(ctx, status.Key())
+		}
 	}
 	// Ignore errors during a halt
 	if ds.HasError() {

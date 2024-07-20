@@ -145,6 +145,14 @@ type AppInstanceConfig struct {
 	AllowToDiscover bool
 }
 
+// SavedAppInstanceConfig is used to persistently remember what config
+// was running e.g., before a device reboot
+type SavedAppInstanceConfig struct {
+	AIC          AppInstanceConfig
+	LastModified time.Time
+	// XXX Something else?
+}
+
 type AppInstanceOpsCmd struct {
 	Counter   uint32
 	ApplyTime string // XXX not currently used

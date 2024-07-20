@@ -40,6 +40,7 @@ const (
 type zedmanagerContext struct {
 	agentbase.AgentBase
 	subAppInstanceConfig      pubsub.Subscription
+	pubSavedAppInstanceConfig pubsub.Publication  // running AIC
 	subAppInstanceStatus      pubsub.Subscription // zedmanager both publishes and subscribes to AppInstanceStatus
 	subLocalAppInstanceConfig pubsub.Subscription
 	pubLocalAppInstanceConfig pubsub.Publication
@@ -121,6 +122,16 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	pubSnapshotConfig.ClearRestarted()
 
 	// Create publish before subscribing and activating subscriptions
+	pubSavedAppInstanceConfig, err := ps.NewPublication(pubsub.PublicationOptions{
+		AgentName:  agentName,
+		Persistent: true,
+		TopicType:  types.SavedAppInstanceConfig{},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	ctx.pubSavedAppInstanceConfig = pubSavedAppInstanceConfig
+
 	pubAppInstanceStatus, err := ps.NewPublication(pubsub.PublicationOptions{
 		AgentName: agentName,
 		TopicType: types.AppInstanceStatus{},
@@ -464,6 +475,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	}
 }
 
+// XXX this should only be called post a checkpoint, right?
 func handleLocalAppInstanceConfigCreate(ctx interface{}, key string, config interface{}) {
 	log.Noticef("handleLocalAppInstanceConfigCreate(%s)", key)
 	zedmanagerCtx := ctx.(*zedmanagerContext)
@@ -701,6 +713,34 @@ func unpublishAppInstanceStatus(ctx *zedmanagerContext,
 	st, _ := pub.Get(key)
 	if st == nil {
 		log.Errorf("unpublishAppInstanceStatus(%s) not found", key)
+		return
+	}
+	pub.Unpublish(key)
+}
+
+// XXX serializeAppInstanceConfig to /persist/vault/zedmanager??
+// /persist/status/zedmanager can be overwritten
+// XXX error reporting if new version completely fails e.g., bad image URL?
+// rely on reporting for CT/volume?
+func publishSavedAppInstanceConfig(ctx *zedmanagerContext,
+	config *types.AppInstanceConfig) {
+
+	key := config.Key()
+	log.Noticef("publishSavedAppInstanceConfig(%s)", key)
+	saved := types.SavedAppInstanceConfig{
+		AIC:          *config,
+		LastModified: time.Now(),
+	}
+	pub := ctx.pubSavedAppInstanceConfig
+	pub.Publish(key, saved)
+}
+
+func unpublishSavedAppInstanceConfig(ctx *zedmanagerContext, key string) {
+	log.Noticef("unpublishSavedAppInstanceConfig(%s)", key)
+	pub := ctx.pubSavedAppInstanceConfig
+	st, _ := pub.Get(key)
+	if st == nil {
+		log.Errorf("unpublishSavedAppInstanceConfig(%s) not found", key)
 		return
 	}
 	pub.Unpublish(key)
@@ -1035,6 +1075,25 @@ func handleCreate(ctxArg interface{}, key string,
 	log.Functionf("handleCreate(%v) for %s",
 		config.UUIDandVersion, config.DisplayName)
 
+	// If the application was running before the device restarted then
+	// we should have a saved file. That will take precedence (if versions
+	// differ) and we will treat this as purge in progress after that.
+	// XXX Do we need some delay to make sure we process create fully
+	// before we switch to the current config from the controller? Trigger?
+	// XXX subLocalAppInstanceConfig vs saved??
+	pub := ctx.pubSavedAppInstanceConfig
+	c, _ := pub.Get(key)
+	if c != nil {
+		runningConfig := c.(types.AppInstanceConfig)
+		// XXX add safety by comparing purgeCmd.Counter and restartCmd.Counter?
+		if !cmp.Equal(config, runningConfig) {
+			log.Functionf("XXX config vs. running: %v",
+				cmp.Diff(config, runningConfig))
+			config = runningConfig
+			// XXX swap back by forcing change - save config
+			// then call handleModify at the end?? Or delay?
+		}
+	}
 	status := types.AppInstanceStatus{
 		UUIDandVersion: config.UUIDandVersion,
 		DisplayName:    config.DisplayName,
@@ -1139,6 +1198,12 @@ func handleModify(ctxArg interface{}, key string,
 
 	ctx := ctxArg.(*zedmanagerContext)
 	config := configArg.(types.AppInstanceConfig)
+	{
+		// XXX
+		effectiveActivate := effectiveActivateCurrentProfile(config, ctx.currentProfile)
+		log.Noticef("XXX config.Activate %t effectiveActivate %t",
+			config.Activate, effectiveActivate)
+	}
 	oldConfig := oldConfigArg.(types.AppInstanceConfig)
 	status := lookupAppInstanceStatus(ctx, key)
 	log.Functionf("handleModify(%v) for %s",
@@ -1147,6 +1212,8 @@ func handleModify(ctxArg interface{}, key string,
 	localConfig := lookupLocalAppInstanceConfig(ctx, config.Key())
 	if localConfig != nil {
 		config = *localConfig
+		log.Noticef("XXX using localConfig config.Activate %t",
+			config.Activate)
 	}
 
 	// Check if we need to roll back to a snapshot
