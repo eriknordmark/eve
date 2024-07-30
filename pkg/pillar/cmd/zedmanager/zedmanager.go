@@ -1080,18 +1080,24 @@ func handleCreate(ctxArg interface{}, key string,
 	// differ) and we will treat this as purge in progress after that.
 	// XXX Do we need some delay to make sure we process create fully
 	// before we switch to the current config from the controller? Trigger?
-	// XXX subLocalAppInstanceConfig vs saved??
+	pendingModify := false
+	var pendingConfig types.AppInstanceConfig
 	pub := ctx.pubSavedAppInstanceConfig
 	c, _ := pub.Get(key)
 	if c != nil {
-		runningConfig := c.(types.AppInstanceConfig)
+		// VerifyOnly will not be set in the saved one. So force it to
+		// true for the comparison.
+		runningConfig := c.(types.SavedAppInstanceConfig).AIC
+		for i := range runningConfig.VolumeRefConfigList {
+			runningConfig.VolumeRefConfigList[i].VerifyOnly = true
+		}
 		// XXX add safety by comparing purgeCmd.Counter and restartCmd.Counter?
 		if !cmp.Equal(config, runningConfig) {
 			log.Functionf("XXX config vs. running: %v",
 				cmp.Diff(config, runningConfig))
+			pendingConfig = config
+			pendingModify = true
 			config = runningConfig
-			// XXX swap back by forcing change - save config
-			// then call handleModify at the end?? Or delay?
 		}
 	}
 	status := types.AppInstanceStatus{
@@ -1191,6 +1197,11 @@ func handleCreate(ctxArg interface{}, key string,
 		publishAppInstanceStatus(ctx, &status)
 	}
 	log.Functionf("handleCreate done for %s", config.DisplayName)
+	if pendingModify {
+		// XXX do we need a delay? Wait for app to be running?
+		log.Noticef("XXX pendingModify now")
+		handleModify(ctxArg, key, pendingConfig, config)
+	}
 }
 
 func handleModify(ctxArg interface{}, key string,
@@ -1333,6 +1344,13 @@ func handleModify(ctxArg interface{}, key string,
 	status.UUIDandVersion = config.UUIDandVersion
 	publishAppInstanceStatus(ctx, status)
 
+	// If neither needPurge nor needRestart and app is running then
+	// we save the config which will be running shortly.
+	// XXX what is there is an error e.g., in an ACL?
+	if !needPurge && !needRestart && status.State == types.RUNNING {
+		log.Noticef("XXX Running - update saved")
+		publishSavedAppInstanceConfig(ctx, &config)
+	}
 	changed := doUpdate(ctx, config, status)
 	if changed {
 		log.Functionf("handleModify status change for %s", status.Key())
