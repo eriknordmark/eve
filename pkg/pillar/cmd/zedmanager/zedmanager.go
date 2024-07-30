@@ -475,7 +475,6 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	}
 }
 
-// XXX this should only be called post a checkpoint, right?
 func handleLocalAppInstanceConfigCreate(ctx interface{}, key string, config interface{}) {
 	log.Noticef("handleLocalAppInstanceConfigCreate(%s)", key)
 	zedmanagerCtx := ctx.(*zedmanagerContext)
@@ -718,10 +717,8 @@ func unpublishAppInstanceStatus(ctx *zedmanagerContext,
 	pub.Unpublish(key)
 }
 
-// XXX serializeAppInstanceConfig to /persist/vault/zedmanager??
-// /persist/status/zedmanager can be overwritten
-// XXX error reporting if new version completely fails e.g., bad image URL?
-// rely on reporting for CT/volume?
+// XXX publishSavedAppInstanceConfig to vault since /persist/status/zedmanager
+// can be overwritten
 func publishSavedAppInstanceConfig(ctx *zedmanagerContext,
 	config *types.AppInstanceConfig) {
 
@@ -1076,25 +1073,32 @@ func handleCreate(ctxArg interface{}, key string,
 		config.UUIDandVersion, config.DisplayName)
 
 	// If the application was running before the device restarted then
-	// we should have a saved file. That will take precedence (if versions
-	// differ) and we will treat this as purge in progress after that.
-	// XXX Do we need some delay to make sure we process create fully
-	// before we switch to the current config from the controller? Trigger?
+	// we should have a SavedAppInstanceConfig. That will take precedence
+	// (if versions differ) and we will treat this as purge in progress
+	// after that. At the end of this create we cause a handleModify XXX.
 	pendingModify := false
 	var pendingConfig types.AppInstanceConfig
 	pub := ctx.pubSavedAppInstanceConfig
 	c, _ := pub.Get(key)
 	if c != nil {
+		runningConfig := c.(types.SavedAppInstanceConfig).AIC
 		// VerifyOnly will not be set in the saved one. So force it to
 		// true for the comparison.
-		runningConfig := c.(types.SavedAppInstanceConfig).AIC
 		for i := range runningConfig.VolumeRefConfigList {
 			runningConfig.VolumeRefConfigList[i].VerifyOnly = true
 		}
 		// XXX add safety by comparing purgeCmd.Counter and restartCmd.Counter?
+		// XXX do we care if just a restart? No download needed.
+		// But need to not forget to apply e.g., an ACL change post
+		// reboot since the Saved might not contain it.
 		if !cmp.Equal(config, runningConfig) {
-			log.Functionf("XXX config vs. running: %v",
+			log.Noticef("XXX config vs. running: %v",
 				cmp.Diff(config, runningConfig))
+			if config.PurgeCmd.Counter != runningConfig.PurgeCmd.Counter {
+				log.Warnf("XXX diff but not a purge")
+			} else if config.RestartCmd.Counter != runningConfig.RestartCmd.Counter {
+				log.Warnf("XXX diff but not a purge or restart!")
+			}
 			pendingConfig = config
 			pendingModify = true
 			config = runningConfig
@@ -1209,12 +1213,6 @@ func handleModify(ctxArg interface{}, key string,
 
 	ctx := ctxArg.(*zedmanagerContext)
 	config := configArg.(types.AppInstanceConfig)
-	{
-		// XXX
-		effectiveActivate := effectiveActivateCurrentProfile(config, ctx.currentProfile)
-		log.Noticef("XXX config.Activate %t effectiveActivate %t",
-			config.Activate, effectiveActivate)
-	}
 	oldConfig := oldConfigArg.(types.AppInstanceConfig)
 	status := lookupAppInstanceStatus(ctx, key)
 	log.Functionf("handleModify(%v) for %s",
@@ -1223,8 +1221,6 @@ func handleModify(ctxArg interface{}, key string,
 	localConfig := lookupLocalAppInstanceConfig(ctx, config.Key())
 	if localConfig != nil {
 		config = *localConfig
-		log.Noticef("XXX using localConfig config.Activate %t",
-			config.Activate)
 	}
 
 	// Check if we need to roll back to a snapshot

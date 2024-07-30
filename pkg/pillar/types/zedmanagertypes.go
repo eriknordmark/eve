@@ -150,7 +150,6 @@ type AppInstanceConfig struct {
 type SavedAppInstanceConfig struct {
 	AIC          AppInstanceConfig
 	LastModified time.Time
-	// XXX Something else?
 }
 
 type AppInstanceOpsCmd struct {

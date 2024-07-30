@@ -204,8 +204,6 @@ func doUpdate(ctx *zedmanagerContext,
 	}
 
 	effectiveActivate := effectiveActivateCurrentProfile(config, ctx.currentProfile)
-	log.Noticef("XXX config.Activate %t effectiveActivate %t",
-		config.Activate, effectiveActivate)
 	if !effectiveActivate {
 		if status.Activated || status.ActivateInprogress {
 			c := doInactivateHalt(ctx, config, status)
@@ -452,6 +450,11 @@ func doInstall(ctx *zedmanagerContext,
 	}
 	if status.State >= types.BOOTING {
 		// Leave State and errors unchanged
+		// This means that if an purge fails to apply the new version
+		// e.g., due to a bad image URL, then the error will be reported
+		// for the content-tree and volume, but not for the running
+		// app instance.
+		// XXX should we add an INFO/WARNING in the AppInstanceStatus?
 	} else {
 		status.State = minState
 		changed = true
@@ -924,7 +927,6 @@ func purgeCmdDone(ctx *zedmanagerContext, config types.AppInstanceConfig,
 		log.Errorf("Failed to update persisted purge counter for app %s-%s: %v",
 			config.DisplayName, config.UUIDandVersion.UUID, err)
 	}
-	// XXX did we already do this when we set RUNNING?
 	publishSavedAppInstanceConfig(ctx, &config)
 	return changed
 }
