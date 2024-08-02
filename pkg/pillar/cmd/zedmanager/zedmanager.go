@@ -718,25 +718,34 @@ func unpublishAppInstanceStatus(ctx *zedmanagerContext,
 }
 
 // XXX publishSavedAppInstanceConfig to vault since /persist/status/zedmanager
-// can be overwritten
+// can be overwritten?
 func publishSavedAppInstanceConfig(ctx *zedmanagerContext,
 	config *types.AppInstanceConfig) {
 
 	key := config.Key()
-	log.Noticef("publishSavedAppInstanceConfig(%s)", key)
+	pub := ctx.pubSavedAppInstanceConfig
+	// XXX debug - remove
+	c, _ := pub.Get(key)
+	if c == nil {
+		log.Noticef("publishSavedAppInstanceConfig(%s) new", key)
+	} else {
+		old := c.(types.SavedAppInstanceConfig)
+		log.Noticef("publishSavedAppInstanceConfig(%s) update diff %v",
+			key, cmp.Diff(old.AIC, config))
+	}
+	// XXX debug - end remove
 	saved := types.SavedAppInstanceConfig{
 		AIC:          *config,
 		LastModified: time.Now(),
 	}
-	pub := ctx.pubSavedAppInstanceConfig
 	pub.Publish(key, saved)
 }
 
 func unpublishSavedAppInstanceConfig(ctx *zedmanagerContext, key string) {
 	log.Noticef("unpublishSavedAppInstanceConfig(%s)", key)
 	pub := ctx.pubSavedAppInstanceConfig
-	st, _ := pub.Get(key)
-	if st == nil {
+	c, _ := pub.Get(key)
+	if c == nil {
 		log.Errorf("unpublishSavedAppInstanceConfig(%s) not found", key)
 		return
 	}
@@ -1081,27 +1090,27 @@ func handleCreate(ctxArg interface{}, key string,
 	pub := ctx.pubSavedAppInstanceConfig
 	c, _ := pub.Get(key)
 	if c != nil {
-		runningConfig := c.(types.SavedAppInstanceConfig).AIC
+		lastRunningConfig := c.(types.SavedAppInstanceConfig).AIC
 		// VerifyOnly will not be set in the saved one. So force it to
 		// true for the comparison.
-		for i := range runningConfig.VolumeRefConfigList {
-			runningConfig.VolumeRefConfigList[i].VerifyOnly = true
+		for i := range lastRunningConfig.VolumeRefConfigList {
+			lastRunningConfig.VolumeRefConfigList[i].VerifyOnly = true
 		}
 		// XXX add safety by comparing purgeCmd.Counter and restartCmd.Counter?
 		// XXX do we care if just a restart? No download needed.
 		// But need to not forget to apply e.g., an ACL change post
 		// reboot since the Saved might not contain it.
-		if !cmp.Equal(config, runningConfig) {
+		if !cmp.Equal(config, lastRunningConfig) {
 			log.Noticef("XXX config vs. running: %v",
-				cmp.Diff(config, runningConfig))
-			if config.PurgeCmd.Counter != runningConfig.PurgeCmd.Counter {
+				cmp.Diff(config, lastRunningConfig))
+			if config.PurgeCmd.Counter == lastRunningConfig.PurgeCmd.Counter {
 				log.Warnf("XXX diff but not a purge")
-			} else if config.RestartCmd.Counter != runningConfig.RestartCmd.Counter {
+			} else if config.RestartCmd.Counter == lastRunningConfig.RestartCmd.Counter {
 				log.Warnf("XXX diff but not a purge or restart!")
 			}
 			pendingConfig = config
 			pendingModify = true
-			config = runningConfig
+			config = lastRunningConfig // XXX do we need a deepCopy?
 		}
 	}
 	status := types.AppInstanceStatus{
@@ -1125,6 +1134,7 @@ func handleCreate(ctxArg interface{}, key string,
 	configCounter := int(config.PurgeCmd.Counter + config.LocalPurgeCmd.Counter)
 	if err == nil {
 		if persistedCounter == configCounter {
+			// XXX why do we get this when we have a purge?
 			log.Functionf("handleCreate(%v) for %s found matching purge counter %d",
 				config.UUIDandVersion, config.DisplayName, persistedCounter)
 		} else {
@@ -1203,7 +1213,15 @@ func handleCreate(ctxArg interface{}, key string,
 	log.Functionf("handleCreate done for %s", config.DisplayName)
 	if pendingModify {
 		// XXX do we need a delay? Wait for app to be running?
-		log.Noticef("XXX pendingModify now")
+		// XXX hack - need to wait for Activated or error in status?
+		// XXX get purge inactive without the wait
+		log.Noticef("XXX pendingModify in 60 seconds")
+		time.Sleep(60 * time.Second)
+		status := lookupAppInstanceStatus(ctx, key)
+		if status != nil {
+			log.Noticef("XXX pendingModify now: State %s Activated %t error %v",
+				status.State, status.Activated, status.Error)
+		}
 		handleModify(ctxArg, key, pendingConfig, config)
 	}
 }
@@ -1217,6 +1235,8 @@ func handleModify(ctxArg interface{}, key string,
 	status := lookupAppInstanceStatus(ctx, key)
 	log.Functionf("handleModify(%v) for %s",
 		config.UUIDandVersion, config.DisplayName)
+	log.Noticef("XXX handleModify(%v) for %s diff %v",
+		config.UUIDandVersion, config.DisplayName, cmp.Diff(oldConfig, config))
 
 	localConfig := lookupLocalAppInstanceConfig(ctx, config.Key())
 	if localConfig != nil {
@@ -1343,7 +1363,8 @@ func handleModify(ctxArg interface{}, key string,
 	// If neither needPurge nor needRestart and app is running then
 	// we save the config which will be running shortly.
 	// XXX what is there is an error e.g., in an ACL?
-	if !needPurge && !needRestart && status.State == types.RUNNING {
+	// XXX what if Activate=false?
+	if !needPurge && !needRestart && status.State == types.RUNNING && config.Activate {
 		log.Noticef("XXX Running - update saved")
 		publishSavedAppInstanceConfig(ctx, &config)
 	}

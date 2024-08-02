@@ -856,7 +856,8 @@ func doActivate(ctx *zedmanagerContext, uuidStr string,
 			status.RestartInprogress = types.NotInprogress
 			status.State = types.RUNNING
 			changed = true
-			publishSavedAppInstanceConfig(ctx, &config)
+			// XXX needed? Config did not change.
+			// publishSavedAppInstanceConfig(ctx, &config)
 		} else {
 			log.Functionf("RestartInprogress(%s) waiting for Activated",
 				status.Key())
@@ -869,7 +870,8 @@ func doActivate(ctx *zedmanagerContext, uuidStr string,
 			status.PurgeInprogress = types.NotInprogress
 			status.State = types.RUNNING
 			changed = true
-			publishSavedAppInstanceConfig(ctx, &config)
+			// XXX needed? config did not change.
+			// publishSavedAppInstanceConfig(ctx, &config)
 		} else {
 			log.Functionf("PurgeInprogress(%s) waiting for Activated",
 				status.Key())
@@ -927,6 +929,7 @@ func purgeCmdDone(ctx *zedmanagerContext, config types.AppInstanceConfig,
 		log.Errorf("Failed to update persisted purge counter for app %s-%s: %v",
 			config.DisplayName, config.UUIDandVersion.UUID, err)
 	}
+	log.Noticef("XXX purgeCmdDone - save new config post purge")
 	publishSavedAppInstanceConfig(ctx, &config)
 	return changed
 }
