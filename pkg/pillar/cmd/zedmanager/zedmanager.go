@@ -733,8 +733,13 @@ func publishSavedAppInstanceConfig(ctx *zedmanagerContext,
 		log.Noticef("publishSavedAppInstanceConfig(%s) new", key)
 	} else {
 		old := c.(types.SavedAppInstanceConfig)
-		log.Noticef("publishSavedAppInstanceConfig(%s) update diff %v",
-			key, cmp.Diff(old.AIC, config))
+		if !cmp.Equal(old.AIC, *config) {
+			log.Noticef("publishSavedAppInstanceConfig(%s) update diff %v",
+				key, cmp.Diff(old.AIC, *config))
+		} else {
+			log.Noticef("publishSavedAppInstanceConfig(%s) update no diff",
+				key)
+		}
 	}
 	// XXX debug - end remove
 	saved := types.SavedAppInstanceConfig{
@@ -1349,9 +1354,9 @@ func handleModify(ctxArg interface{}, key string,
 		}
 	}
 
-	if config.RestartCmd.Counter != oldConfig.RestartCmd.Counter ||
-		config.LocalRestartCmd.Counter != oldConfig.LocalRestartCmd.Counter {
-
+	haveRestart := (config.RestartCmd.Counter != oldConfig.RestartCmd.Counter ||
+		config.LocalRestartCmd.Counter != oldConfig.LocalRestartCmd.Counter)
+	if haveRestart {
 		log.Functionf("handleModify(%v) for %s restartcmd from %d/%d to %d/%d "+
 			"needRestart: %v",
 			config.UUIDandVersion, config.DisplayName,
@@ -1379,9 +1384,9 @@ func handleModify(ctxArg interface{}, key string,
 		return
 	}
 
-	if config.PurgeCmd.Counter != oldConfig.PurgeCmd.Counter ||
-		config.LocalPurgeCmd.Counter != oldConfig.LocalPurgeCmd.Counter ||
-		(needPurge && status.SnapStatus.HasRollbackRequest) {
+	havePurge := (config.PurgeCmd.Counter != oldConfig.PurgeCmd.Counter ||
+		config.LocalPurgeCmd.Counter != oldConfig.LocalPurgeCmd.Counter)
+	if havePurge || (needPurge && status.SnapStatus.HasRollbackRequest) {
 		log.Functionf("handleModify(%v) for %s purgecmd from %d/%d to %d/%d "+
 			"needPurge: %v",
 			config.UUIDandVersion, config.DisplayName,
@@ -1410,8 +1415,7 @@ func handleModify(ctxArg interface{}, key string,
 	// If neither needPurge nor needRestart and app is running then
 	// we save the config which will be running shortly.
 	// XXX what is there is an error e.g., in an ACL?
-	// XXX what if Activate=false?
-	if !needPurge && !needRestart && status.State == types.RUNNING && config.Activate {
+	if !needPurge && !needRestart && !havePurge && !haveRestart && status.State == types.RUNNING && config.Activate {
 		log.Noticef("XXX Running - update saved")
 		publishSavedAppInstanceConfig(ctx, &config)
 	}
