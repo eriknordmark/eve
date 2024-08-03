@@ -36,6 +36,8 @@ func updateAIStatusUUID(ctx *zedmanagerContext, uuidStr string) {
 			status.State, uuidStr)
 		publishAppInstanceStatus(ctx, status)
 		publishAppInstanceSummary(ctx)
+		// XXX do a saner callback somewhere? Also periodic? trigger flag in ctx?
+		maybeApplyPendingAppInstanceModify(ctx, uuidStr)
 	}
 }
 
@@ -108,6 +110,7 @@ func removeAIStatus(ctx *zedmanagerContext, status *types.AppInstanceStatus) {
 		if changed {
 			publishAppInstanceStatus(ctx, status)
 			publishAppInstanceSummary(ctx)
+			maybeApplyPendingAppInstanceModify(ctx, status.Key())
 		}
 	} else {
 		log.Errorf("removeAIStatus(%s): PurgeInprogress no config!",

@@ -563,8 +563,11 @@ func checkDelayedStartApps(ctx *zedmanagerContext) {
 		if status != nil && status.State == types.START_DELAYED && status.StartTime.Before(time.Now()) {
 			// Change the state immediately, so we do not enter here twice
 			status.State = types.INSTALLED
-			doUpdate(ctx, config, status)
-			publishAppInstanceStatus(ctx, status)
+			if doUpdate(ctx, config, status) {
+				publishAppInstanceStatus(ctx, status)
+				publishAppInstanceSummary(ctx)
+				maybeApplyPendingAppInstanceModify(ctx, status.Key())
+			}
 		}
 	}
 }
@@ -810,6 +813,23 @@ func lookupLocalAppInstanceConfig(ctx *zedmanagerContext, key string) *types.App
 	}
 	config := c.(types.AppInstanceConfig)
 	return &config
+}
+
+// lookupLastRunningConfig needs to do some adjustments based on
+// the use of VerifyOnly in the VolumeRefConfigList
+func lookupLastRunningConfig(ctx *zedmanagerContext, key string) *types.AppInstanceConfig {
+	pub := ctx.pubSavedAppInstanceConfig
+	c, _ := pub.Get(key)
+	if c == nil {
+		return nil
+	}
+	lastRunningConfig := c.(types.SavedAppInstanceConfig).AIC
+	// VerifyOnly will not be set in the saved one. So force it to
+	// true for the comparison in the caller.
+	for i := range lastRunningConfig.VolumeRefConfigList {
+		lastRunningConfig.VolumeRefConfigList[i].VerifyOnly = true
+	}
+	return &lastRunningConfig
 }
 
 func isSnapshotRequestedOnUpdate(status *types.AppInstanceStatus, config types.AppInstanceConfig) bool {
@@ -1083,34 +1103,26 @@ func handleCreate(ctxArg interface{}, key string,
 
 	// If the application was running before the device restarted then
 	// we should have a SavedAppInstanceConfig. That will take precedence
-	// (if versions differ) and we will treat this as purge in progress
-	// after that. At the end of this create we cause a handleModify XXX.
-	pendingModify := false
-	var pendingConfig types.AppInstanceConfig
-	pub := ctx.pubSavedAppInstanceConfig
-	c, _ := pub.Get(key)
-	if c != nil {
-		lastRunningConfig := c.(types.SavedAppInstanceConfig).AIC
-		// VerifyOnly will not be set in the saved one. So force it to
-		// true for the comparison.
-		for i := range lastRunningConfig.VolumeRefConfigList {
-			lastRunningConfig.VolumeRefConfigList[i].VerifyOnly = true
-		}
+	// (if versions differ) and we will treat this as modify after this
+	// create has completed.
+	lastRunningConfig := lookupLastRunningConfig(ctx, key)
+	if lastRunningConfig != nil {
 		// XXX add safety by comparing purgeCmd.Counter and restartCmd.Counter?
 		// XXX do we care if just a restart? No download needed.
-		// But need to not forget to apply e.g., an ACL change post
+		// But need to not forget to apply e.g., an ACL change after a
 		// reboot since the Saved might not contain it.
-		if !cmp.Equal(config, lastRunningConfig) {
-			log.Noticef("XXX config vs. running: %v",
-				cmp.Diff(config, lastRunningConfig))
+		if !cmp.Equal(config, *lastRunningConfig) {
+			log.Noticef("XXX handleCreate config vs. lastRunning: %v",
+				cmp.Diff(config, *lastRunningConfig))
 			if config.PurgeCmd.Counter == lastRunningConfig.PurgeCmd.Counter {
 				log.Warnf("XXX diff but not a purge")
 			} else if config.RestartCmd.Counter == lastRunningConfig.RestartCmd.Counter {
 				log.Warnf("XXX diff but not a purge or restart!")
 			}
-			pendingConfig = config
-			pendingModify = true
-			config = lastRunningConfig // XXX do we need a deepCopy?
+			config = *lastRunningConfig // XXX do we need a deepCopy?
+			// XXX record something in status here? Or always recheck?
+			// Could have a bool but need to publish here and then clear
+			// and publish when done with handleModify
 		}
 	}
 	status := types.AppInstanceStatus{
@@ -1200,6 +1212,8 @@ func handleCreate(ctxArg interface{}, key string,
 		status.SetErrorWithSource(allErrors, types.AppInstanceStatus{},
 			time.Now())
 		publishAppInstanceStatus(ctx, &status)
+		publishAppInstanceSummary(ctx)
+		maybeApplyPendingAppInstanceModify(ctx, status.Key())
 		return
 	}
 
@@ -1209,21 +1223,54 @@ func handleCreate(ctxArg interface{}, key string,
 		log.Functionf("AppInstance(Name:%s, UUID:%s): handleCreate status change.",
 			config.DisplayName, config.UUIDandVersion.UUID)
 		publishAppInstanceStatus(ctx, &status)
+		publishAppInstanceSummary(ctx)
+		maybeApplyPendingAppInstanceModify(ctx, status.Key())
 	}
 	log.Functionf("handleCreate done for %s", config.DisplayName)
-	if pendingModify {
-		// XXX do we need a delay? Wait for app to be running?
-		// XXX hack - need to wait for Activated or error in status?
-		// XXX get purge inactive without the wait
-		log.Noticef("XXX pendingModify in 60 seconds")
-		time.Sleep(60 * time.Second)
-		status := lookupAppInstanceStatus(ctx, key)
-		if status != nil {
-			log.Noticef("XXX pendingModify now: State %s Activated %t error %v",
-				status.State, status.Activated, status.Error)
-		}
-		handleModify(ctxArg, key, pendingConfig, config)
+}
+
+// maybeApplyPendingAppInstanceModify checks if the app instance status has progressed
+// to either Activated or Error, and if so if there is a difference between the
+// config from zedagent (XXX or local snapshot) and the lastRunning config, then
+// apply that using handleModify
+// XXX should we return bool processed so caller can remove from list of keys?
+// Makes it possible to run from keepRunning check.
+func maybeApplyPendingAppInstanceModify(ctx *zedmanagerContext, key string) {
+	status := lookupAppInstanceStatus(ctx, key)
+	if status == nil {
+		return
 	}
+	log.Noticef("XXX maybeApplyPendingAppInstanceModify: State %s Activated %t error %v",
+		status.State, status.Activated, status.Error)
+	if !status.Activated && !status.HasError() {
+		// Still waiting for state progression
+		return
+	}
+	// XXX should we look for a snapshot aka local here?
+	config := lookupAppInstanceConfig(ctx, key, true)
+	lastRunningConfig := lookupLastRunningConfig(ctx, key)
+	if config == nil || lastRunningConfig == nil {
+		log.Noticef("XXX maybeApplyPendingAppInstanceModify missing configs")
+		return
+	}
+	// XXX add safety by comparing purgeCmd.Counter and restartCmd.Counter?
+	// XXX do we care if just a restart? No download needed.
+	// But need to not forget to apply e.g., an ACL change after a
+	// reboot since the Saved might not contain it.
+	if cmp.Equal(*config, *lastRunningConfig) {
+		log.Noticef("XXX maybeApplyPendingAppInstanceModify: no diff")
+		return
+	}
+	log.Noticef("XXX maybeApplyPendingAppInstanceModify config vs. lastRunning: %v",
+		cmp.Diff(config, *lastRunningConfig))
+	if config.PurgeCmd.Counter == lastRunningConfig.PurgeCmd.Counter {
+		log.Warnf("XXX diff but not a purge")
+	} else if config.RestartCmd.Counter == lastRunningConfig.RestartCmd.Counter {
+		log.Warnf("XXX diff but not a purge or restart!")
+	}
+	log.Noticef("XXX maybeApplyPendingAppInstanceModify pendingModify now: State %s Activated %t error %v",
+		status.State, status.Activated, status.Error)
+	handleModify(ctx, key, *config, *lastRunningConfig)
 }
 
 func handleModify(ctxArg interface{}, key string,
@@ -1659,6 +1706,8 @@ func updateBasedOnProfile(ctx *zedmanagerContext, oldProfile string) {
 				config.Key(), effectiveActivateOld, effectiveActivate)
 			if doUpdate(ctx, config, status) {
 				publishAppInstanceStatus(ctx, status)
+				publishAppInstanceSummary(ctx)
+				maybeApplyPendingAppInstanceModify(ctx, status.Key())
 			}
 		}
 	}
