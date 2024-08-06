@@ -472,12 +472,14 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 		case <-stillRunning.C:
 		}
 		ps.StillRunning(agentName, warningTime, errorTime)
-		// XXX catch all in case there are missing calls
-		// XXX but bug is in not preserving the VolumeConfig in volumemgr!
-		items := ctx.subAppInstanceConfig.GetAll()
-		for _, c := range items {
-			config := c.(types.AppInstanceConfig)
-			maybeApplyPendingAppInstanceModify(&ctx, config.Key())
+		if false {
+			// XXX this periodic check causes rework because the Saved is
+			// not updated until done.
+			items := ctx.subAppInstanceConfig.GetAll()
+			for _, c := range items {
+				config := c.(types.AppInstanceConfig)
+				maybeApplyPendingAppInstanceModify(&ctx, config.Key())
+			}
 		}
 	}
 }
@@ -807,15 +809,9 @@ func lookupAppInstanceConfig(ctx *zedmanagerContext, key string, checkLocal bool
 	if lastRunningConfig == nil {
 		return config
 	}
-	// XXX add safety by comparing purgeCmd.Counter and restartCmd.Counter?
 	if !cmp.Equal(*config, *lastRunningConfig) {
 		log.Noticef("XXX lookupAppInstanceConfig config vs. lastRunning: %v",
 			cmp.Diff(*config, *lastRunningConfig))
-		if config.PurgeCmd.Counter == lastRunningConfig.PurgeCmd.Counter {
-			log.Warnf("XXX diff but not a purge")
-		} else if config.RestartCmd.Counter == lastRunningConfig.RestartCmd.Counter {
-			log.Warnf("XXX diff but not a purge or restart!")
-		}
 		return lastRunningConfig
 	}
 	return config
@@ -1144,20 +1140,11 @@ func handleCreate(ctxArg interface{}, key string,
 	// create has completed.
 	lastRunningConfig := lookupLastRunningConfig(ctx, key)
 	if lastRunningConfig != nil {
-		// XXX add safety by comparing purgeCmd.Counter and restartCmd.Counter?
-		// XXX do we care if just a restart? No download needed.
-		// But need to not forget to apply e.g., an ACL change after a
-		// reboot since the Saved might not contain it.
 		if !cmp.Equal(config, *lastRunningConfig) {
 			log.Noticef("XXX handleCreate config vs. lastRunning: %v",
 				cmp.Diff(config, *lastRunningConfig))
-			if config.PurgeCmd.Counter == lastRunningConfig.PurgeCmd.Counter {
-				log.Warnf("XXX diff but not a purge")
-			} else if config.RestartCmd.Counter == lastRunningConfig.RestartCmd.Counter {
-				log.Warnf("XXX diff but not a purge or restart!")
-			}
-			config = *lastRunningConfig // XXX do we need a deepCopy?
-			// XXX record something in status here? Or always recheck?
+			config = *lastRunningConfig
+			// XXX record something in status here?
 			// Could have a bool but need to publish here and then clear
 			// and publish when done with handleModify
 		}
@@ -1277,8 +1264,10 @@ func maybeApplyPendingAppInstanceModify(ctx *zedmanagerContext, key string) {
 	if status == nil {
 		return
 	}
-	log.Noticef("XXX maybeApplyPendingAppInstanceModify: State %s Activated %t error %v",
-		status.State, status.Activated, status.Error)
+	log.Noticef("XXX maybeApplyPendingAppInstanceModify: State %s Activated %t ActivateInprogress %t error %v",
+		status.State, status.Activated, status.ActivateInprogress, status.Error)
+	// XXX should we also check ActivateInprogress? Does purge work correctly in
+	// that state?
 	if !status.Activated && !status.HasError() {
 		// Still waiting for state progression
 		return
@@ -1291,21 +1280,14 @@ func maybeApplyPendingAppInstanceModify(ctx *zedmanagerContext, key string) {
 		log.Noticef("XXX maybeApplyPendingAppInstanceModify missing configs")
 		return
 	}
-	// XXX add safety by comparing purgeCmd.Counter and restartCmd.Counter?
-	// XXX do we care if just a restart? No download needed.
-	// But need to not forget to apply e.g., an ACL change after a
-	// reboot since the Saved might not contain it.
+	// Note that we can not compare PurgeCmd.Counter and RestartCmdCounter
+	// XXX since they do match. Why?
 	if cmp.Equal(*config, *lastRunningConfig) {
 		log.Noticef("XXX maybeApplyPendingAppInstanceModify: no diff")
 		return
 	}
 	log.Noticef("XXX maybeApplyPendingAppInstanceModify config vs. lastRunning: %v",
 		cmp.Diff(*config, *lastRunningConfig))
-	if config.PurgeCmd.Counter == lastRunningConfig.PurgeCmd.Counter {
-		log.Warnf("XXX diff but not a purge")
-	} else if config.RestartCmd.Counter == lastRunningConfig.RestartCmd.Counter {
-		log.Warnf("XXX diff but not a purge or restart!")
-	}
 	log.Noticef("XXX maybeApplyPendingAppInstanceModify pendingModify now: State %s Activated %t error %v",
 		status.State, status.Activated, status.Error)
 	handleModify(ctx, key, *config, *lastRunningConfig)

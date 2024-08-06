@@ -363,6 +363,7 @@ func doInstall(ctx *zedmanagerContext,
 				removed = true
 			}
 		}
+		// XXX this is not inactive?
 		log.Functionf("purge inactive (%s) volumeRefStatus from %d to %d",
 			config.Key(), len(status.VolumeRefStatusList), len(newVrs))
 		status.VolumeRefStatusList = newVrs
