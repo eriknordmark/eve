@@ -295,7 +295,7 @@ func reactToSnapshotRollback(ctx *zedmanagerContext, volumesSnapshotStatus types
 	}
 	appInstanceStatus.SnapStatus.RollbackInProgress = false
 	// unpublish local app instance config, as the rollback is complete, we do not need to replace the config
-	config := lookupAppInstanceConfig(ctx, appInstanceStatus.Key(), false)
+	config := lookupAppInstanceConfig(ctx, appInstanceStatus.Key(), false, false)
 	if config == nil {
 		log.Fatalf("reactToSnapshotRollback: AppInstanceConfig not found for %s", appInstanceStatus.Key())
 	}
@@ -513,7 +513,8 @@ func restoreAppInstanceConfigFromSnapshot(ctx *zedmanagerContext, appInstanceSta
 // something like: applyAppInstanceFromSnapshot.
 func fixupAppInstanceConfig(ctx *zedmanagerContext, appInstanceStatus *types.AppInstanceStatus, snappedAppInstanceConfig *types.AppInstanceConfig) (*types.AppInstanceConfig, error) {
 	// Get the app instance config from the app instance status
-	currentAppInstanceConfig := lookupAppInstanceConfig(ctx, appInstanceStatus.Key(), true)
+	// XXX should we look for SavedAppInstanceConfig?
+	currentAppInstanceConfig := lookupAppInstanceConfig(ctx, appInstanceStatus.Key(), true, false)
 	if currentAppInstanceConfig == nil {
 		return nil, fmt.Errorf("AppInstanceConfig not found for %s", appInstanceStatus.Key())
 	}

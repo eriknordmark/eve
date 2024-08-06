@@ -25,7 +25,8 @@ func updateAIStatusUUID(ctx *zedmanagerContext, uuidStr string) {
 			uuidStr)
 		return
 	}
-	config := lookupAppInstanceConfig(ctx, uuidStr, true)
+	// If we have a SavedAppInstanceConfig we need to use it
+	config := lookupAppInstanceConfig(ctx, uuidStr, true, true)
 	if config == nil || (status.PurgeInprogress == types.BringDown) {
 		removeAIStatus(ctx, status)
 		return
@@ -100,7 +101,8 @@ func removeAIStatus(ctx *zedmanagerContext, status *types.AppInstanceStatus) {
 		status.Key())
 	status.PurgeInprogress = types.RecreateVolumes
 	publishAppInstanceStatus(ctx, status)
-	config := lookupAppInstanceConfig(ctx, uuidStr, true)
+	// XXX need saved? We're doing a purge based on what? Avoid Saved for now
+	config := lookupAppInstanceConfig(ctx, uuidStr, true, false)
 	if config != nil {
 		changed := purgeCmdDone(ctx, *config, status)
 		if changed {

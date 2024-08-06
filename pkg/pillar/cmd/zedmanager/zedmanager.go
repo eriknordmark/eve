@@ -479,7 +479,7 @@ func handleLocalAppInstanceConfigCreate(ctx interface{}, key string, config inte
 	log.Noticef("handleLocalAppInstanceConfigCreate(%s)", key)
 	zedmanagerCtx := ctx.(*zedmanagerContext)
 	localConfig := config.(types.AppInstanceConfig)
-	oldConfig := lookupAppInstanceConfig(zedmanagerCtx, localConfig.Key(), false)
+	oldConfig := lookupAppInstanceConfig(zedmanagerCtx, localConfig.Key(), false, false)
 	if oldConfig == nil {
 		log.Fatalf("handleLocalAppInstanceConfigCreate: no regular AppInstanceConfig for %s", key)
 	}
@@ -531,7 +531,7 @@ func checkRetry(ctxPtr *zedmanagerContext) {
 		if !status.MissingMemory {
 			continue
 		}
-		config := lookupAppInstanceConfig(ctxPtr, status.Key(), true)
+		config := lookupAppInstanceConfig(ctxPtr, status.Key(), true, true)
 		if config == nil {
 			log.Noticef("checkRetry: %s waiting for memory but no config",
 				status.Key())
@@ -671,7 +671,7 @@ func publishAppInstanceSummary(ctxPtr *zedmanagerContext) {
 	for _, st := range items {
 		status := st.(types.AppInstanceStatus)
 		effectiveActivate := false
-		config := lookupAppInstanceConfig(ctxPtr, status.Key(), true)
+		config := lookupAppInstanceConfig(ctxPtr, status.Key(), true, true)
 		if config != nil {
 			effectiveActivate = effectiveActivateCurrentProfile(*config, ctxPtr.currentProfile)
 		}
@@ -790,7 +790,32 @@ func lookupAppInstanceStatus(ctx *zedmanagerContext, key string) *types.AppInsta
 // lookupAppInstanceConfig returns the AppInstanceConfig for the given key. If checkLocal is true, then the local
 // AppInstanceConfig subscription is checked first, not the regular one. The local subscription is used for
 // AppInstanceConfig that comes from snapshot during a rollback.
-func lookupAppInstanceConfig(ctx *zedmanagerContext, key string, checkLocal bool) *types.AppInstanceConfig {
+// XXX also prefers SavedAppInstanceConfig when checkSaved is set
+func lookupAppInstanceConfig(ctx *zedmanagerContext, key string, checkLocal bool, checkSaved bool) *types.AppInstanceConfig {
+	config := lookupAppInstanceConfigInternal(ctx, key, checkLocal)
+	if config == nil || !checkSaved {
+		return config
+	}
+	lastRunningConfig := lookupLastRunningConfig(ctx, key)
+	if lastRunningConfig == nil {
+		return config
+	}
+	// XXX add safety by comparing purgeCmd.Counter and restartCmd.Counter?
+	if !cmp.Equal(config, *lastRunningConfig) {
+		log.Noticef("XXX lookupAppInstanceConfig config vs. lastRunning: %v",
+			cmp.Diff(config, *lastRunningConfig))
+		if config.PurgeCmd.Counter == lastRunningConfig.PurgeCmd.Counter {
+			log.Warnf("XXX diff but not a purge")
+		} else if config.RestartCmd.Counter == lastRunningConfig.RestartCmd.Counter {
+			log.Warnf("XXX diff but not a purge or restart!")
+		}
+		return lastRunningConfig
+	}
+	return config
+}
+
+// Used by lookupAppInstanceConfig only
+func lookupAppInstanceConfigInternal(ctx *zedmanagerContext, key string, checkLocal bool) *types.AppInstanceConfig {
 	if checkLocal {
 		sub := ctx.subLocalAppInstanceConfig
 		c, _ := sub.Get(key)
@@ -1252,7 +1277,8 @@ func maybeApplyPendingAppInstanceModify(ctx *zedmanagerContext, key string) {
 		return
 	}
 	// XXX should we look for a snapshot aka local here?
-	config := lookupAppInstanceConfig(ctx, key, true)
+	// Avoid looking at SavedAppInstanceConfig
+	config := lookupAppInstanceConfig(ctx, key, true, false)
 	lastRunningConfig := lookupLastRunningConfig(ctx, key)
 	if config == nil || lastRunningConfig == nil {
 		log.Noticef("XXX maybeApplyPendingAppInstanceModify missing configs")
