@@ -62,8 +62,8 @@ func parseVolumeConfig(ctx *getconfigContext,
 		}
 		if !foundVolume || !sameGenCounter {
 			// volume not found, delete
-			log.Functionf("parseVolumeConfig: deleting %s\n", volume.Key())
-			unpublishVolumeConfig(ctx, volume.Key())
+			log.Noticef("XXX parseVolumeConfig: not deleting %s\n", volume.Key())
+			// unpublishVolumeConfig(ctx, volume.Key())
 			if !foundVolume {
 				delLocalVolumeConfig(ctx, uuid)
 			}

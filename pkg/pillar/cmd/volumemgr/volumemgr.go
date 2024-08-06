@@ -466,24 +466,6 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 
 	ctx.volumeConfigCreateDeferredMap = make(map[string]*types.VolumeConfig)
 
-	subVolumeConfig, err := ps.NewSubscription(pubsub.SubscriptionOptions{
-		CreateHandler:  handleVolumeCreate,
-		ModifyHandler:  handleVolumeModify,
-		DeleteHandler:  handleVolumeDelete,
-		RestartHandler: handleVolumeRestart,
-		WarningTime:    warningTime,
-		ErrorTime:      errorTime,
-		AgentName:      "zedagent",
-		MyAgentName:    agentName,
-		TopicImpl:      types.VolumeConfig{},
-		Ctx:            &ctx,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	ctx.subVolumeConfig = subVolumeConfig
-	subVolumeConfig.Activate()
-
 	subVolumeRefConfig, err := ps.NewSubscription(pubsub.SubscriptionOptions{
 		CreateHandler: handleVolumeRefCreate,
 		ModifyHandler: handleVolumeRefModify,
@@ -500,6 +482,25 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	}
 	ctx.subVolumeRefConfig = subVolumeRefConfig
 	subVolumeRefConfig.Activate()
+
+	subVolumeConfig, err := ps.NewSubscription(pubsub.SubscriptionOptions{
+		CreateHandler:  handleVolumeCreate,
+		ModifyHandler:  handleVolumeModify,
+		DeleteHandler:  handleVolumeDelete,
+		RestartHandler: handleVolumeRestart,
+		WarningTime:    warningTime,
+		ErrorTime:      errorTime,
+		AgentName:      "zedagent",
+		MyAgentName:    agentName,
+		TopicImpl:      types.VolumeConfig{},
+		Ctx:            &ctx,
+		Persistent:     true,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	ctx.subVolumeConfig = subVolumeConfig
+	subVolumeConfig.Activate()
 
 	subDatastoreConfig, err := ps.NewSubscription(pubsub.SubscriptionOptions{
 		CreateHandler: handleDatastoreConfigCreate,

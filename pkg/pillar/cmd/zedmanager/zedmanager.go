@@ -472,6 +472,13 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 		case <-stillRunning.C:
 		}
 		ps.StillRunning(agentName, warningTime, errorTime)
+		// XXX catch all in case there are missing calls
+		// XXX but bug is in not preserving the VolumeConfig in volumemgr!
+		items := ctx.subAppInstanceConfig.GetAll()
+		for _, c := range items {
+			config := c.(types.AppInstanceConfig)
+			maybeApplyPendingAppInstanceModify(&ctx, config.Key())
+		}
 	}
 }
 
@@ -801,9 +808,9 @@ func lookupAppInstanceConfig(ctx *zedmanagerContext, key string, checkLocal bool
 		return config
 	}
 	// XXX add safety by comparing purgeCmd.Counter and restartCmd.Counter?
-	if !cmp.Equal(config, *lastRunningConfig) {
+	if !cmp.Equal(*config, *lastRunningConfig) {
 		log.Noticef("XXX lookupAppInstanceConfig config vs. lastRunning: %v",
-			cmp.Diff(config, *lastRunningConfig))
+			cmp.Diff(*config, *lastRunningConfig))
 		if config.PurgeCmd.Counter == lastRunningConfig.PurgeCmd.Counter {
 			log.Warnf("XXX diff but not a purge")
 		} else if config.RestartCmd.Counter == lastRunningConfig.RestartCmd.Counter {
@@ -1293,7 +1300,7 @@ func maybeApplyPendingAppInstanceModify(ctx *zedmanagerContext, key string) {
 		return
 	}
 	log.Noticef("XXX maybeApplyPendingAppInstanceModify config vs. lastRunning: %v",
-		cmp.Diff(config, *lastRunningConfig))
+		cmp.Diff(*config, *lastRunningConfig))
 	if config.PurgeCmd.Counter == lastRunningConfig.PurgeCmd.Counter {
 		log.Warnf("XXX diff but not a purge")
 	} else if config.RestartCmd.Counter == lastRunningConfig.RestartCmd.Counter {
