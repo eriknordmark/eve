@@ -494,7 +494,9 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 		MyAgentName:    agentName,
 		TopicImpl:      types.VolumeConfig{},
 		Ctx:            &ctx,
-		Persistent:     true,
+		// XXX hack - fix is to have SavedAppInstanceConfig
+		// trigger (or include?) the savedVolumeConfig
+		Persistent: true,
 	})
 	if err != nil {
 		log.Fatal(err)

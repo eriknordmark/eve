@@ -121,6 +121,7 @@ func handleDeferredVolumeCreate(ctx *volumemgrContext, key string, config *types
 	log.Noticef("handleDeferredVolumeCreate(%s) setting contentFormat to %s", key, volumeFormat[status.Key()])
 	status.ContentFormat = volumeFormat[status.Key()]
 
+	// XXX this is the check for existing content
 	created, err := volumehandlers.GetVolumeHandler(log, ctx, status).Populate()
 	if err != nil {
 		status.SetError(err.Error(), time.Now())

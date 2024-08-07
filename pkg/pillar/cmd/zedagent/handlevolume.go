@@ -62,6 +62,8 @@ func parseVolumeConfig(ctx *getconfigContext,
 		}
 		if !foundVolume || !sameGenCounter {
 			// volume not found, delete
+			// XXX hack - fix is to have SavedAppInstanceConfig
+			// trigger (or include?) the savedVolumeConfig
 			log.Noticef("XXX parseVolumeConfig: not deleting %s\n", volume.Key())
 			// unpublishVolumeConfig(ctx, volume.Key())
 			if !foundVolume {

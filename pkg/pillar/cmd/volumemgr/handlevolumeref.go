@@ -56,6 +56,9 @@ func handleVolumeRefCreate(ctxArg interface{}, key string,
 			State:                  types.INITIAL, // Waiting for VolumeConfig from zedagent
 			VerifyOnly:             config.VerifyOnly,
 		}
+		// XXX what if volume exists on disk?
+		// Turns out we can not create a VolumeStatus from the disk
+		// content so we need a savedVolumeConfig
 	}
 	publishVolumeRefStatus(ctx, status)
 	if needUpdateVol {
