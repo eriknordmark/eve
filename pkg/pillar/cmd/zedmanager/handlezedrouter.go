@@ -157,6 +157,13 @@ func handleAppNetworkStatusImpl(ctxArg interface{}, key string,
 			status.PendingModify, status.PendingDelete, status.DisplayName, key)
 		return
 	}
+	// XX even if there is some other error, update IP addresses, metrics etc
+	ais := lookupAppInstanceStatus(ctx, status.Key())
+	if ais != nil {
+		log.Noticef("XXX updateAppNetworkStatus")
+		updateAppNetworkStatus(ais, &status)
+		publishAppInstanceStatus(ctx, ais)
+	}
 	updateAIStatusUUID(ctx, status.Key())
 	log.Functionf("handleAppNetworkStatusModify done for %s", key)
 }
