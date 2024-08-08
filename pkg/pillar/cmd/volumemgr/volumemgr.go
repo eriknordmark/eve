@@ -80,11 +80,12 @@ type volumemgrContext struct {
 
 	worker worker.Worker // For background work
 
-	verifierRestarted    bool // Wait for verifier to restart
-	contentTreeRestarted bool // Wait to receive all contentTree after restart
-	usingConfig          bool // From zedagent
-	gcRunning            bool
-	initGced             bool // Will be marked true after initObjects are garbage collected
+	verifierRestarted     bool // Wait for verifier to restart
+	contentTreeRestarted  bool // Wait to receive all contentTree after restart
+	volumeConfigRestarted bool
+	usingConfig           bool // From zedagent
+	gcRunning             bool
+	initGced              bool // Will be marked true after initObjects are garbage collected
 
 	globalConfig       *types.ConfigItemValueMap
 	GCInitialized      bool

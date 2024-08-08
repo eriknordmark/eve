@@ -24,8 +24,12 @@ func handleVolumeCreate(ctxArg interface{}, key string,
 	if err := vault.DisallowVaultCleanup(); err != nil {
 		log.Errorf("cannot disallow vault cleanup: %s", err)
 	}
-	//defer creation to restart handler
-	ctx.volumeConfigCreateDeferredMap[key] = &config
+	if ctx.volumeConfigRestarted {
+		handleDeferredVolumeCreate(ctx, key, &config)
+	} else {
+		// defer creation to restart handler
+		ctx.volumeConfigCreateDeferredMap[key] = &config
+	}
 	log.Functionf("handleVolumeCreate(%s) Done", key)
 }
 
@@ -185,6 +189,7 @@ func handleVolumeRestart(ctxArg interface{}, restartCount int) {
 		handleDeferredVolumeCreate(ctx, key, config)
 		delete(ctx.volumeConfigCreateDeferredMap, key)
 	}
+	ctx.volumeConfigRestarted = true
 	log.Tracef("handleVolumeRestart done: %d", restartCount)
 }
 
