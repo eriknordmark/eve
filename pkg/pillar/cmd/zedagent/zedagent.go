@@ -1212,9 +1212,6 @@ func initPublications(zedagentCtx *zedagentContext) {
 		pubsub.PublicationOptions{
 			AgentName: agentName,
 			TopicType: types.VolumeConfig{},
-			// XXX hack - fix is to have SavedAppInstanceConfig
-			// trigger (or include?) the savedVolumeConfig
-			Persistent: true,
 		})
 	if err != nil {
 		log.Fatal(err)
