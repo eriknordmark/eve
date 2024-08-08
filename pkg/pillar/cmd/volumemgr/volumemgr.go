@@ -60,6 +60,7 @@ type volumemgrContext struct {
 	subContentTreeConfig    pubsub.Subscription
 	pubContentTreeStatus    pubsub.Publication
 	subVolumeConfig         pubsub.Subscription
+	pubSavedVolumeConfig    pubsub.Publication
 	pubVolumeStatus         pubsub.Publication
 	subVolumeRefConfig      pubsub.Subscription
 	pubVolumeRefStatus      pubsub.Publication
@@ -318,6 +319,16 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 		log.Fatal(err)
 	}
 	ctx.pubVolumeStatus = pubVolumeStatus
+
+	pubSavedVolumeConfig, err := ps.NewPublication(pubsub.PublicationOptions{
+		AgentName:  agentName,
+		Persistent: true,
+		TopicType:  types.VolumeConfig{},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	ctx.pubSavedVolumeConfig = pubSavedVolumeConfig
 
 	pubVolumeRefStatus, err := ps.NewPublication(pubsub.PublicationOptions{
 		AgentName: agentName,

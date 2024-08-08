@@ -47,6 +47,7 @@ func handleVolumeRefCreate(ctxArg interface{}, key string,
 			status.ClearErrorWithSource()
 		}
 		needUpdateVol = true
+		publishVolumeRefStatus(ctx, status)
 	} else {
 		status = &types.VolumeRefStatus{
 			VolumeID:               config.VolumeID,
@@ -56,8 +57,19 @@ func handleVolumeRefCreate(ctxArg interface{}, key string,
 			State:                  types.INITIAL, // Waiting for VolumeConfig from zedagent
 			VerifyOnly:             config.VerifyOnly,
 		}
+		publishVolumeRefStatus(ctx, status)
+		// If we have a saved VolumeConfig (from previous boot), then
+		// feed it in as if we had received it from the controller
+		vc := ctx.LookupSavedVolumeConfig(config.VolumeKey())
+		if vc != nil {
+			log.Noticef("handleVolumeRefCreate: found saved VolumeStatus for %s",
+				config.VolumeKey())
+			handleVolumeCreate(ctx, config.VolumeKey(), vc)
+		} else {
+			log.Noticef("handleVolumeRefCreate: NO saved VolumeStatus for %s",
+				config.VolumeKey())
+		}
 	}
-	publishVolumeRefStatus(ctx, status)
 	if needUpdateVol {
 		changed, _ := doUpdateVol(ctx, vs)
 		if changed {

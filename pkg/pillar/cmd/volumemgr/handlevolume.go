@@ -39,6 +39,9 @@ func handleVolumeModify(ctxArg interface{}, key string,
 		//update deferred creation if exists
 		ctx.volumeConfigCreateDeferredMap[key] = &config
 	} else {
+		// Make sure we have a saved copy of VolumeConfig post reboot
+		publishSavedVolumeConfig(ctx, &config)
+
 		status := ctx.LookupVolumeStatus(config.Key())
 		if status == nil {
 			log.Fatalf("status doesn't exist at handleVolumeModify for %s", config.Key())
@@ -96,6 +99,9 @@ func handleVolumeDelete(ctxArg interface{}, key string,
 func handleDeferredVolumeCreate(ctx *volumemgrContext, key string, config *types.VolumeConfig) {
 
 	log.Tracef("handleDeferredVolumeCreate(%s)", key)
+	// Make sure we have a saved copy of VolumeConfig post reboot
+	publishSavedVolumeConfig(ctx, config)
+
 	status := ctx.LookupVolumeStatus(config.Key())
 	if status != nil {
 		log.Fatalf("status exists at handleVolumeCreate for %s", config.Key())
@@ -234,6 +240,44 @@ func getAllVolumeStatus(ctx *volumemgrContext) []*types.VolumeStatus {
 	return retList
 }
 
+func publishSavedVolumeConfig(ctx *volumemgrContext,
+	status *types.VolumeConfig) {
+
+	key := status.Key()
+	log.Tracef("publishSavedVolumeConfig(%s)", key)
+	pub := ctx.pubSavedVolumeConfig
+	pub.Publish(key, *status)
+	log.Tracef("publishSavedVolumeConfig(%s) Done", key)
+}
+
+func unpublishSavedVolumeConfig(ctx *volumemgrContext, key string) {
+	log.Tracef("unpublishSavedVolumeConfig(%s)", key)
+	pub := ctx.pubSavedVolumeConfig
+	c, _ := pub.Get(key)
+	if c == nil {
+		log.Errorf("unpublishSavedVolumeConfig(%s) not found", key)
+		return
+	}
+	pub.Unpublish(key)
+	log.Tracef("unpublishSavedVolumeConfig(%s) Done", key)
+}
+
+// LookupSavedVolumeConfig returns VolumeConfig based on key
+func (ctxPtr *volumemgrContext) LookupSavedVolumeConfig(key string) *types.VolumeConfig {
+	log.Tracef("lookupSavedVolumeConfig(%s)", key)
+	pub := ctxPtr.pubSavedVolumeConfig
+	c, _ := pub.Get(key)
+	if c == nil {
+		log.Tracef("lookupSavedVolumeConfig(%s) not found", key)
+		return nil
+	}
+	config := c.(types.VolumeConfig)
+	log.Tracef("lookupSavedVolumeConfig(%s) Done", key)
+	return &config
+}
+
+// XXX also need a  GC to garbage collect unused savedVolumeConfig
+
 // LookupVolumeConfig returns VolumeConfig based on key
 func (ctxPtr *volumemgrContext) LookupVolumeConfig(key string) *types.VolumeConfig {
 	log.Tracef("lookupVolumeConfig(%s)", key)
@@ -296,6 +340,7 @@ func maybeDeleteVolume(ctx *volumemgrContext, status *types.VolumeStatus) {
 		if appDiskMetric := lookupAppDiskMetric(ctx, status.FileLocation); appDiskMetric != nil {
 			unpublishAppDiskMetrics(ctx, appDiskMetric)
 		}
+		unpublishSavedVolumeConfig(ctx, status.Key())
 	}
 	log.Functionf("maybeDeleteVolume for %v Done", status.Key())
 }
