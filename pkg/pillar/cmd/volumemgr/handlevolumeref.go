@@ -64,7 +64,7 @@ func handleVolumeRefCreate(ctxArg interface{}, key string,
 		if vc != nil {
 			log.Noticef("handleVolumeRefCreate: found saved VolumeStatus for %s",
 				config.VolumeKey())
-			handleVolumeCreate(ctx, config.VolumeKey(), vc)
+			handleVolumeCreate(ctx, config.VolumeKey(), *vc)
 		} else {
 			log.Noticef("handleVolumeRefCreate: NO saved VolumeStatus for %s",
 				config.VolumeKey())
