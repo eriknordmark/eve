@@ -90,3 +90,14 @@ func (m MetricsMap) AddInto(toMap MetricsMap) {
 		toMap[ifname] = dst
 	}
 }
+
+// CounterArray is used to count info message types (ZInfoType_Zi*)
+type CounterArray struct {
+	Counters []NameVal
+}
+
+// NameVal
+type NameVal struct {
+	Name string
+	Val  uint64
+}
