@@ -858,6 +858,9 @@ func publishMetrics(ctx *zedagentContext, iteration int) {
 	if ctx.zedcloudMetrics != nil {
 		ctx.zedcloudMetrics.Publish(log, ctx.pubMetricsMap, "global")
 	}
+	if ctx.counterArray != nil {
+		ctx.pubCounterArray.Publish("global", *ctx.counterArray)
+	}
 }
 
 func getCellularMetrics(ctx *zedagentContext) (cellularMetrics []*metrics.CellularMetric) {
