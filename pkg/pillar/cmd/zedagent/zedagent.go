@@ -122,6 +122,7 @@ type zedagentContext struct {
 	subAppFlowMonitor         pubsub.Subscription
 	pubGlobalConfig           pubsub.Publication
 	pubMetricsMap             pubsub.Publication
+	pubCounterArray           pubsub.Publication
 	subGlobalConfig           pubsub.Subscription
 	subEdgeNodeCert           pubsub.Subscription
 	subVaultStatus            pubsub.Subscription
@@ -245,6 +246,8 @@ type zedagentContext struct {
 
 	// Used for retry of SendAttestEscrow
 	publishedAttestEscrow bool
+
+	counterArray *types.CounterArray
 
 	attestationTryCount int
 	// cli options
@@ -626,6 +629,7 @@ func waitUntilInitializedFromNodeAgentStatus(ctx *zedagentContext, running *time
 
 func (zedagentCtx *zedagentContext) init() {
 	zedagentCtx.agentMetrics = controllerconn.NewAgentMetrics()
+	zedagentCtx.counterArray = makeCounterArray()
 	zedagentCtx.specMap = types.NewConfigItemSpecMap()
 	zedagentCtx.globalConfig = *types.DefaultConfigItemValueMap()
 	zedagentCtx.globalStatus.ConfigItems = make(
@@ -679,6 +683,18 @@ func (zedagentCtx *zedagentContext) init() {
 	attestCtx.zedagentCtx = zedagentCtx
 	zedagentCtx.attestCtx = attestCtx
 	zedagentCtx.hvTypeKube = base.IsHVTypeKube()
+}
+
+func makeCounterArray() *types.CounterArray {
+	// XXX how to find last? size fo map insufficient since 2,4,5,15 are missing
+	arr := make([]types.NameVal, info.ZInfoTypes_ZiKubeClusterUpdateStatus+1)
+	for i := range arr {
+		name, ok := info.ZInfoTypes_name[int32(i)]
+		if ok {
+			arr[i].Name = name
+		}
+	}
+	return &types.CounterArray{Counters: arr}
 }
 
 func initializeDirs() {
@@ -1157,6 +1173,15 @@ func initPublications(zedagentCtx *zedagentContext) {
 		pubsub.PublicationOptions{
 			AgentName: agentName,
 			TopicType: types.MetricsMap{},
+		})
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Publish zedagent cloud metrics.
+	zedagentCtx.pubCounterArray, err = ps.NewPublication(
+		pubsub.PublicationOptions{
+			AgentName: agentName,
+			TopicType: types.CounterArray{},
 		})
 	if err != nil {
 		log.Fatal(err)
@@ -2772,6 +2797,9 @@ func getDeferredSentHandlerFunction(ctx *zedagentContext) controllerconn.SentHan
 		} else if result == types.SenderStatusNone {
 			if data == nil {
 				return
+			}
+			if el, ok := itemType.(info.ZInfoTypes); ok {
+				ctx.counterArray.Counters[el].Val++
 			}
 			if el, ok := itemType.(info.ZInfoTypes); ok && el == info.ZInfoTypes_ZiDevice {
 				saveSentDeviceInfoProtoMessage(data.Bytes())
