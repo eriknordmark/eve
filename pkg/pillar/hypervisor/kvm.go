@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2023 Zededa, Inc.
+// Copyright (c) 2017-2024 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 package hypervisor
@@ -1163,18 +1163,9 @@ func waitForQmp(domainName string, available bool) error {
 	delay := time.Second
 	var waited time.Duration
 	var err error
+	sock := GetQmpExecutorSocket(domainName)
 
 	for {
-		logrus.Infof("waitForQmp for %s %t: waiting for %v", domainName, available, delay)
-		if delay != 0 {
-			time.Sleep(delay)
-			waited += delay
-		}
-		sock := GetQmpExecutorSocket(domainName)
-		if _, err = getQemuStatus(sock); available == (err == nil) {
-			logrus.Infof("waitForQmp for %s %t done", domainName, available)
-			return nil
-		}
 		if waited > maxDelay {
 			// Give up
 			logrus.Warnf("waitForQmp for %s %t: giving up", domainName, available)
@@ -1182,6 +1173,15 @@ func waitForQmp(domainName string, available bool) error {
 				return logError("Giving up waiting to connect to QEMU Monitor Protocol socket %s from VM %s, error: %v", sock, domainName, err)
 			}
 			return logError("Giving up waiting to cleanup VM %s, QEMU Monitor Protocol socket %s is still available", domainName, sock)
+		}
+		logrus.Infof("waitForQmp for %s %t: waiting for %v", domainName, available, delay)
+		if delay != 0 {
+			time.Sleep(delay)
+			waited += delay
+		}
+		if _, err = getQemuStatus(sock); available == (err == nil) {
+			logrus.Infof("waitForQmp for %s %t done", domainName, available)
+			return nil
 		}
 		delay = 2 * delay
 		if delay > time.Minute {
