@@ -1,3 +1,6 @@
+// Copyright (c) 2020-2024 Zededa, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 package hypervisor
 
 import (
@@ -15,10 +18,14 @@ import (
 // this package implements subset of
 //     https://qemu.weilnetz.de/doc/qemu-qmp-ref.html
 
-const sockTimeout = 10 * time.Second
+const (
+	sockTimeout   = 10 * time.Second
+	qmpRetries    = 5
+	qmpRetrySleep = 3 * time.Second
+)
 
 func execRawCmd(socket, cmd string) ([]byte, error) {
-	var retry = 3
+	var retry = qmpRetries
 	logrus.Debugf("executing QMP command: %s", cmd)
 	var err error
 	var monitor *qmp.SocketMonitor
@@ -28,7 +35,7 @@ func execRawCmd(socket, cmd string) ([]byte, error) {
 			break
 		}
 		retry = retry - 1
-		time.Sleep(time.Second)
+		time.Sleep(qmpRetrySleep)
 	}
 
 	if err != nil {
@@ -121,13 +128,13 @@ func getQemuStatus(socket string) (types.SwState, error) {
 	// the status is unexpected, EVE stops QEMU and game over.
 	var errs error
 	state := types.UNKNOWN
-	for attempt := 1; attempt <= 3; attempt++ {
+	for attempt := 1; attempt <= qmpRetries; attempt++ {
 		raw, err := execRawCmd(socket, `{ "execute": "query-status" }`)
 		if err != nil {
 			err = fmt.Errorf("[attempt %d] qmp status failed for QMP socket '%s': err: '%v'; (JSON response: '%s')",
 				attempt, socket, err, raw)
 			errs = joinErrors(errs, err)
-			time.Sleep(time.Second)
+			time.Sleep(qmpRetrySleep)
 			continue
 		}
 
@@ -146,7 +153,7 @@ func getQemuStatus(socket string) (types.SwState, error) {
 			err = fmt.Errorf("[attempt %d] failed to parse QMP status response for QMP socket '%s': err: '%v'; (JSON response: '%s')",
 				attempt, socket, err, raw)
 			errs = joinErrors(errs, err)
-			time.Sleep(time.Second)
+			time.Sleep(qmpRetrySleep)
 			continue
 		}
 		var matched bool
@@ -154,7 +161,7 @@ func getQemuStatus(socket string) (types.SwState, error) {
 			err = fmt.Errorf("[attempt %d] unknown QMP status '%s' for QMP socket '%s'; (JSON response: '%s')",
 				attempt, result.Return.Status, socket, raw)
 			errs = joinErrors(errs, err)
-			time.Sleep(time.Second)
+			time.Sleep(qmpRetrySleep)
 			continue
 		}
 
