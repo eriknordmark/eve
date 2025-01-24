@@ -226,8 +226,9 @@ func qmpEventHandler(listenerSocket, executorSocket string) {
 					logrus.Errorf("qmpEventHandler: Exception while quitting domain with socket: %s. %s", executorSocket, err.Error())
 				}
 			default:
-				//Not handling the following events: RESUME, NIC_RX_FILTER_CHANGED, RTC_CHANGE, POWERDOWN, STOP
-				logrus.Warnf("qmpEventHandler: Unhandled event: %s from QMP socket: %s", event.Event, listenerSocket)
+				//Not handling the following events: RESUME, NIC_RX_FILTER_CHANGED, RTC_CHANGE, POWERDOWN, STOP, RESET, etc
+				logrus.Warnf("qmpEventHandler: Unhandled event: %s event details: %v from QMP socket: %s",
+					event.Event, event.Data, listenerSocket)
 			}
 		}
 	}
