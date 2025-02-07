@@ -437,6 +437,7 @@ func configTimerTask(getconfigCtx *getconfigContext, handleChannel chan interfac
 	handleChannel <- ticker
 
 	// ticker for periodical info publish around 10 min when no real change
+	// XXX not setable!!
 	interval2 := time.Duration(600) * time.Second
 	max2 := float64(interval2) * 1.2
 	min2 := float64(interval2) * 0.8
