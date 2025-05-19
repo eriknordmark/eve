@@ -1134,6 +1134,8 @@ func generateConfigRequest(getconfigCtx *getconfigContext, isCompoundConfig bool
 	}
 	var b []byte
 	if isCompoundConfig {
+		// XXX shouldn't we use max of compoundConfigLastTimestamp and
+		// lastConfigTimestamp?
 		compoundRequest := &zconfig.CompoundEdgeDevConfigRequest{
 			LastCmdTimestamp: getconfigCtx.compoundConfLastTimestamp,
 			CfgReq:           configRequest,
