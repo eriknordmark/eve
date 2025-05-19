@@ -1029,6 +1029,8 @@ func generateConfigRequest(getconfigCtx *getconfigContext, isCompoundConfig bool
 	}
 	var b []byte
 	if isCompoundConfig {
+		// XXX shouldn't we use max of compoundConfigLastTimestamp and
+		// lastConfigTimestamp?
 		compoundRequest := &zconfig.CompoundEdgeDevConfigRequest{
 			LastCmdTimestamp: getconfigCtx.sideController.compoundConfLastTimestamp,
 			CfgReq:           configRequest,
@@ -1134,8 +1136,13 @@ func inhaleCompoundDeviceConfig(getconfigCtx *getconfigContext,
 	if devCmd != nil {
 		processReceivedDevCommands(getconfigCtx, devCmd)
 	}
+	// XXX what about radio_config? Note that we do not send the
+	// same radio status to LOC as we do to LPS.
 
 	// Acknowledge the config has been processed
+	// XXX max of controller and LOC?
+	// XXX we have config_timestamp in the API which we record in
+	// lastConfigTimestamp. So ok??
 	getconfigCtx.sideController.compoundConfLastTimestamp =
 		compoundConfig.Timestamp
 }
