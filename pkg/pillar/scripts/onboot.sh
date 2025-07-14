@@ -90,7 +90,6 @@ echo "$(date -Ins -u) Configuration from factory/install:"
 echo
 
 mkdir -p "$WATCHDOG_PID" "$WATCHDOG_FILE"
-touch "$WATCHDOG_PID/zedbox.pid" "$WATCHDOG_FILE/zedbox.touch"
 
 if [ -c $TPM_DEVICE_PATH ] && ! [ -f $DEVICE_KEY_NAME ]; then
     # It is a device with TPM, enable disk encryption

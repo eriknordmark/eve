@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/lf-edge/eve/pkg/pillar/agentlog"
 	"github.com/lf-edge/eve/pkg/pillar/base"
@@ -43,6 +42,7 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/cmd/zedmanager"
 	"github.com/lf-edge/eve/pkg/pillar/cmd/zedrouter"
 	"github.com/lf-edge/eve/pkg/pillar/cmd/zfsmanager"
+	"github.com/lf-edge/eve/pkg/pillar/controllerconn"
 	"github.com/lf-edge/eve/pkg/pillar/pubsub"
 	"github.com/lf-edge/eve/pkg/pillar/pubsub/socketdriver"
 	_ "github.com/lf-edge/eve/pkg/pillar/rstats"
@@ -51,9 +51,7 @@ import (
 )
 
 const (
-	agentName   = "zedbox"
-	errorTime   = 3 * time.Minute
-	warningTime = 40 * time.Second
+	agentName = "zedbox"
 )
 
 // The function returns an exit value
@@ -107,6 +105,14 @@ func main() {
 	if sep, ok := entrypoints[basename]; ok {
 		retval := runService(basename, sep)
 		os.Exit(retval)
+	}
+	// XXX we should do InitializeCertDir some different way
+	// If this zedbox?
+	if basename == agentName {
+		err := controllerconn.InitializeCertDir(log)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 	fmt.Printf("zedbox: Unknown package: %s\n", basename)
 	os.Exit(1)
