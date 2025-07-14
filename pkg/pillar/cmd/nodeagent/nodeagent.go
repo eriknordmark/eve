@@ -337,7 +337,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	// trigger the device to reboot on
 	// fallback timeout expiry
 	//
-	// On zedbox modules activation, nodeagent will
+	// On startup, nodeagent will
 	// track the controller connectivity events
 	//
 	// These timer functions will be tracked using
@@ -387,7 +387,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 
 	initNodeDrainPubSub(ps, ctxPtr)
 
-	log.Functionf("zedbox event loop")
+	log.Functionf("nodeagent event loop")
 	for {
 		select {
 		case change := <-subGlobalConfig.MsgChan():

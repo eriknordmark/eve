@@ -380,6 +380,8 @@ func publishMetrics(ctx *zedagentContext, iteration int) {
 
 	ReportDeviceMetric.Cellular = getCellularMetrics(ctx)
 
+	// XXX this is incorrect since there is no zedbox. Should we count across
+	// all agent processes?
 	zedboxStats := new(metrics.ZedboxStats)
 	zedboxStats.NumGoRoutines = uint32(runtime.NumGoroutine()) // number of zedbox goroutines
 	ReportDeviceMetric.Zedbox = zedboxStats

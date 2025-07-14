@@ -219,11 +219,11 @@ start_ntp_daemon() {
     fi
 }
 
+# XXX this is only for InitializeCertDir. Do that somewhere else?
 # If zedbox is already running we don't have to start it.
 if ! pgrep zedbox >/dev/null; then
-    echo "$(date -Ins -u) Starting zedbox"
-    $BINDIR/zedbox &
-    wait_for_touch zedbox
+    echo "$(date -Ins -u) Run zedbox for InitializeCertDir"
+    $BINDIR/zedbox
 fi
 
 # Look for a USB stick with a usb.json file
