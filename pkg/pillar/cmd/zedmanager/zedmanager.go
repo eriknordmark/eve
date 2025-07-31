@@ -691,7 +691,8 @@ func handleConfigRestart(ctxArg interface{}, restartCounter int) {
 	}
 }
 
-func handleIdentitymgrRestarted(ctxArg interface{}, restartCounter int) {
+// XXX DEAD CODE
+func xxxhandleIdentitymgrRestarted(ctxArg interface{}, restartCounter int) {
 	ctx := ctxArg.(*zedmanagerContext)
 
 	log.Functionf("handleIdentitymgrRestarted(%d)", restartCounter)
