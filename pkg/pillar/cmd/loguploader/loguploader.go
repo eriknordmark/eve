@@ -720,6 +720,7 @@ func doFetchSend(ctx *loguploaderContext, zipDir string, iter *int) int {
 				contSentFailure++
 				contSentSuccess = 0
 			}
+			// XXX code doesn't check code!
 			// if resp code is 503, or continuously 3 times unavailable failed, start to set the 'FailedToSend' status
 			// 'newlogd' gzip directory space management and random spaced out uploading schedule is
 			// based on the 'FailedToSend' status
@@ -853,6 +854,8 @@ func sendToCloud(ctx *loguploaderContext, data []byte, iter int, fName string, f
 		SuppressLogs:   ctx.airgapMode,
 	})
 	if rv.HTTPResp != nil {
+		log.Noticef("http code %d %s for %s", rv.HTTPResp.StatusCode,
+			http.StatusText(rv.HTTPResp.StatusCode), logsURL)
 		if rv.HTTPResp.StatusCode == http.StatusOK ||
 			rv.HTTPResp.StatusCode == http.StatusCreated {
 			latency := time.Since(startTime).Nanoseconds() / int64(time.Millisecond)
@@ -922,7 +925,8 @@ func sendToCloud(ctx *loguploaderContext, data []byte, iter int, fName string, f
 	} else {
 		serviceUnavailable = true
 		sentFailed = true
-		log.Tracef("sendToCloud: sent failed no resp, content %s", string(rv.RespContents))
+		log.Errorf("sendToCloud: sent failed err %v, content %s",
+			err, string(rv.RespContents))
 	}
 	if sentFailed {
 		if isApp {
