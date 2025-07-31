@@ -348,6 +348,7 @@ func (c *Client) SendOnAllIntf(ctx context.Context, url string, b *bytes.Buffer,
 		sendOnIntfOpts := opts
 		sendOnIntfOpts.AllowProxy = true
 		sendOnIntfOpts.UseOnboard = false
+		start := time.Now()
 		rv, err := c.SendOnIntf(ctx, url, intf, b, sendOnIntfOpts)
 		combinedRV.TracedReqs = append(combinedRV.TracedReqs, rv.TracedReqs...)
 		// This changes original boolean logic a little in V2 API.
@@ -364,6 +365,9 @@ func (c *Client) SendOnAllIntf(ctx context.Context, url string, b *bytes.Buffer,
 				combinedRV.Status = types.SenderStatusNotFound
 			case http.StatusForbidden:
 				combinedRV.Status = types.SenderStatusForbidden
+			case http.StatusGatewayTimeout:
+				errorLog("GatewayTimeout after %v for %s",
+					time.Since(start), url)
 			}
 		}
 
@@ -517,6 +521,7 @@ func (c *Client) VerifyAllIntf(ctx context.Context,
 		if rv.HTTPResp != nil &&
 			(rv.HTTPResp.StatusCode >= http.StatusInternalServerError &&
 				rv.HTTPResp.StatusCode <= http.StatusNetworkAuthenticationRequired) {
+			// XXX this is for all 5xx
 			verifyRV.RemoteTempFailure = true
 		}
 		if err != nil {
