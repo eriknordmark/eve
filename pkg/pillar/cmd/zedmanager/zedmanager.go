@@ -509,6 +509,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 			checkDelayedStartApps(&ctx)
 
 		case <-priorityStartTicker.C:
+			// XXX why running all the time and logging?
 			checkLowPriorityApps(&ctx)
 		case <-stillRunning.C:
 		}
