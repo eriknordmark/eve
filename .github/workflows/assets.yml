@@ -125,6 +125,11 @@ jobs:
             docker export --output assets/collected_sources.tar.gz eve_sources
             docker rm eve_sources
           fi
+      - name: Publish sbom to assets
+        run: |
+          if [ "${{ matrix.platform }}" != "evaluation" ]; then
+             docker run "$EVE" sbom > assets/rootfs.spdx.json
+          fi
       - name: Rename, create SHA256 checksums and upload files
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
