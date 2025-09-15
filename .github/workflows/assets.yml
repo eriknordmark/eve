@@ -143,6 +143,11 @@ jobs:
             [ -e "$file" ] || continue
             zstd -T0 --rm -q --long=30 "$file"
           done
+      - name: Publish sbom to assets
+        run: |
+          if [ "${{ matrix.platform }}" != "evaluation" ]; then
+             docker run "$EVE" sbom > assets/rootfs.spdx.json
+          fi
       - name: Rename, create SHA256 checksums and upload files
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
