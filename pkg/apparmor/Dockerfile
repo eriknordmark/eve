@@ -21,7 +21,9 @@ RUN ../common/list_af_names.sh > base_af_names.h && \
 
 #Pull a selected set of artifacts into the final stage.
 FROM scratch
-COPY --from=build /out/ /
+# XXX where is /out populated?
+# COPY --from=build /out/ /
+COPY --from=build /out/lib/ /lib/
 COPY --from=build /apparmor/parser/apparmor_parser /usr/bin/
 COPY /etc/ /etc
 COPY /profiles/* /etc/apparmor.d
