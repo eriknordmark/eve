@@ -49,8 +49,10 @@ tar -C "/mirror/$ALPINE_VERSION/rootfs" -cf- . | tar -C /out -xf-
 # speaking this maybe not needed (or at least optional)
 PKGS="$PKGS apk-tools"
 
+cp /lib/apk/db/installed /out/lib/apk/db/installed.pre
 set $PKGS
 [ $# -eq 0 ] || apk add --no-cache -p /out "$@"
 
+cp /lib/apk/db/installed /out/lib/apk/db/installed.post
 # FIXME: see above
 cp /etc/apk/repositories.upstream /out/etc/apk/repositories
