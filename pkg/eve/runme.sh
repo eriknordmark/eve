@@ -267,7 +267,9 @@ prepare_for_hv() {
     case "$hv" in
     kvm|xen)
         ;;
-    k)
+    k|uni)
+        # uni includes kube payloads and pre-compressed rootfs images that
+        # don't shrink in the outer squashfs — needs the larger media size.
         # Override image sizes with the max of the two values
         if [ "$DEFAULT_K_IMG_SIZE" -gt "$DEFAULT_INSTALLER_IMG_SIZE" ]; then
             DEFAULT_INSTALLER_IMG_SIZE="$DEFAULT_K_IMG_SIZE"
