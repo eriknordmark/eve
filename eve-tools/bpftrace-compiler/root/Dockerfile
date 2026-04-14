@@ -7,7 +7,7 @@ FROM ${EVE_KERNEL} AS kernel
 
 FROM lfedge/eve-bpftrace:d9ea8f7379cccc6670b463b8918569986e68dad6 AS eve-bpftrace
 
-FROM lfedge/eve-alpine:745ae9066273c73b0fd879c4ba4ff626a8392d04-dirty-fe81aa7 AS bpftrace
+FROM lfedge/eve-alpine:32c9b42d3bee7681d4fd38619e2cc1f6f238909e AS bpftrace
 
 # hadolint ignore=DL3018
 RUN apk add --no-cache --initdb make gcc g++ git perl musl-dev cmake zlib-dev bcc-dev libbpf-dev cereal flex bison llvm13-libs llvm13-dev llvm13-static clang-dev clang-static pahole gtest-dev bash
