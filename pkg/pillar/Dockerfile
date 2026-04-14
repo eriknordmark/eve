@@ -10,8 +10,8 @@ ARG BUILD_PKGS_BASE="git gcc linux-headers libc-dev make linux-pam-dev m4 findut
 # we use the same image in several places
 ARG EVE_ALPINE_IMAGE=lfedge/eve-alpine:2d6e98f16feecec9010204c0ca8f2f35214862eb
 
-FROM lfedge/eve-uefi:b3ef9ca37c99439c776673aeba83c52ea8b84626 AS uefi-build
-FROM lfedge/eve-dom0-ztools:e9fb7d625a47288420efa7431a8d9c5dc6f146e3 AS zfs
+FROM lfedge/eve-uefi:219373ef5d2a74f8aa7fd991373c4b64c3764baa AS uefi-build
+FROM lfedge/eve-dom0-ztools:4be46392b67f810afcae673e72e094d8a831f787 AS zfs
 RUN mkdir /out
 # copy zfs-related files from dom0-ztools using prepared list of files
 RUN while read -r x; do \
@@ -146,9 +146,9 @@ RUN --mount=type=cache,target=/root/.cache/go-build if [ "${TEST_TOOLS}" = "y" ]
     GOBIN=/final/opt/ GOFLAGS="" go install gotest.tools/gotestsum@v1.7.0; \
 fi
 
-FROM lfedge/eve-fscrypt:d528516ed00f61a5ba4ba2407ab3a94bd55aff90 AS fscrypt
-FROM lfedge/eve-dnsmasq:66334faad5620503b542c8faa2012c3697659ce2 AS dnsmasq
-FROM lfedge/eve-gpt-tools:8e4f3e10e861373aa269b3ebeef483153f3399dc AS gpttools
+FROM lfedge/eve-fscrypt:29e97dcbb91f9a421e7302b117ff759b03e4a2ef AS fscrypt
+FROM lfedge/eve-dnsmasq:ef38dfd0c6478ed3ca7461502370f8c7513bb238 AS dnsmasq
+FROM lfedge/eve-gpt-tools:d6c40a711a628fdc338c1d0eba17a26e87132561 AS gpttools
 
 
 # collector collects everything together and then does any processing like stripping binaries.
