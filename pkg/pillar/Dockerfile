@@ -8,7 +8,7 @@ ARG BUILD_PKGS_BASE="git gcc linux-headers libc-dev make linux-pam-dev m4 findut
                      libintl libuuid libtirpc libblkid libcrypto1.1 zlib tar"
 
 # we use the same image in several places
-ARG EVE_ALPINE_IMAGE=lfedge/eve-alpine:2d6e98f16feecec9010204c0ca8f2f35214862eb
+ARG EVE_ALPINE_IMAGE=lfedge/eve-alpine:32c9b42d3bee7681d4fd38619e2cc1f6f238909e
 
 FROM lfedge/eve-uefi:219373ef5d2a74f8aa7fd991373c4b64c3764baa AS uefi-build
 FROM lfedge/eve-dom0-ztools:4be46392b67f810afcae673e72e094d8a831f787 AS zfs
