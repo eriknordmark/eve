@@ -325,8 +325,8 @@ func TestWpaSupplicantNeedsRecreate(t *testing.T) {
 	t.Parallel()
 	c := &WpaSupplicantConfigurator{}
 	old := WpaSupplicant{AdapterIfName: "wlan0", WiFiConfigs: []WifiConfig{{SSID: "A"}}}
-	new := WpaSupplicant{AdapterIfName: "wlan0", WiFiConfigs: []WifiConfig{{SSID: "B"}}}
-	if !c.NeedsRecreate(old, new) {
+	updated := WpaSupplicant{AdapterIfName: "wlan0", WiFiConfigs: []WifiConfig{{SSID: "B"}}}
+	if !c.NeedsRecreate(old, updated) {
 		t.Error("NeedsRecreate() = false, want true (Modify is not implemented)")
 	}
 }
