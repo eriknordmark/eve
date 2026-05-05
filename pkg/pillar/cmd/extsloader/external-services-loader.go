@@ -133,6 +133,7 @@ type externalServicesContext struct {
 	pkgsImgMounted       bool
 	servicesStarted      map[string]bool
 	servicesSkipped      map[string]bool // services intentionally not started
+	overlaysMounted      map[string]bool // overlay services applied to host fs
 	containerdClient     *containerd.Client
 	ctx                  context.Context
 }
@@ -185,6 +186,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 		scanTrigger:     make(chan string, 1),
 		servicesStarted: make(map[string]bool),
 		servicesSkipped: make(map[string]bool),
+		overlaysMounted: make(map[string]bool),
 	}
 
 	log.Functionf("Initializing agent base")
@@ -339,6 +341,7 @@ func scanForPkgsImg(ctx *externalServicesContext) {
 			if ctx.pkgsImgMounted {
 				log.Functionf("extension image already mounted, verifying services")
 				verifyServices(ctx)
+				verifyOverlays(ctx)
 			} else {
 				log.Functionf("extension image not mounted; waiting for relevant pubsub updates")
 			}
@@ -1063,23 +1066,188 @@ func startAllServices(ctx *externalServicesContext) error {
 
 		servicePath := filepath.Join(servicesPath, serviceName)
 
-		log.Noticef("━━━ Starting service: %s ━━━", serviceName)
-		log.Functionf("Service path: %s", servicePath)
-
 		// Touch watchdog before starting each service
 		ctx.ps.StillRunning(agentName, warningTime, errorTime)
 
-		if err := startService(ctx, serviceName, servicePath); err != nil {
-			log.Errorf("Failed to start %s: %v", serviceName, err)
+		if _, err := os.Stat(filepath.Join(servicePath, "overlay.json")); err == nil {
+			log.Noticef("━━━ Mounting overlay service: %s ━━━", serviceName)
+			if err := mountOverlayService(ctx, serviceName, servicePath); err != nil {
+				log.Errorf("Failed to mount overlay %s: %v", serviceName, err)
+			} else {
+				ctx.overlaysMounted[serviceName] = true
+				serviceCount++
+				log.Noticef("✓ %s overlay mounted (%d/%d)", serviceName, serviceCount, len(entries))
+			}
 		} else {
-			ctx.servicesStarted[serviceName] = true
-			serviceCount++
-			log.Noticef("✓ %s started successfully (%d/%d)", serviceName, serviceCount, len(entries))
+			log.Noticef("━━━ Starting service: %s ━━━", serviceName)
+			log.Functionf("Service path: %s", servicePath)
+			if err := startService(ctx, serviceName, servicePath); err != nil {
+				log.Errorf("Failed to start %s: %v", serviceName, err)
+			} else {
+				ctx.servicesStarted[serviceName] = true
+				serviceCount++
+				log.Noticef("✓ %s started successfully (%d/%d)", serviceName, serviceCount, len(entries))
+			}
 		}
 	}
 
 	log.Noticef("Finished starting services: %d successful", serviceCount)
 	return nil
+}
+
+// overlaySpec describes the host-filesystem overlays an extension service
+// applies. It is loaded from overlay.json in the service directory.
+// A service directory containing overlay.json is treated as a one-shot overlay
+// setup rather than a long-running container.
+//
+// Example overlay.json:
+//
+//	{
+//	  "overlays": [
+//	    { "source": "lib/modules", "target": "/lib/modules", "depmod": true,  "udev_trigger": true },
+//	    { "source": "lib/firmware", "target": "/lib/firmware", "udev_trigger": true }
+//	  ]
+//	}
+type overlaySpec struct {
+	Overlays []overlayEntry `json:"overlays"`
+}
+
+// overlayEntry describes a single overlay mount to stack on the host.
+type overlayEntry struct {
+	// Source is the path relative to the service directory inside the extension
+	// image (e.g. "lib/modules"). It becomes the top lowerdir.
+	Source string `json:"source"`
+	// Target is the absolute host path to overmount (e.g. "/lib/modules").
+	// It becomes the bottom lowerdir and the mount point.
+	Target string `json:"target"`
+	// Depmod triggers "depmod -a" after all overlays in this spec are mounted.
+	Depmod bool `json:"depmod"`
+	// UdevTrigger triggers "udevadm trigger --action=add" after mounting so
+	// the kernel rescans devices and loads newly visible drivers/firmware.
+	UdevTrigger bool `json:"udev_trigger"`
+}
+
+func loadOverlaySpec(path string) (*overlaySpec, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var spec overlaySpec
+	if err := json.NewDecoder(f).Decode(&spec); err != nil {
+		return nil, err
+	}
+	return &spec, nil
+}
+
+// isOverlayMounted returns true when an overlay filesystem is already mounted
+// at target (checked via /proc/mounts).
+func isOverlayMounted(target string) bool {
+	data, err := os.ReadFile("/proc/mounts")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 3 && fields[1] == target && fields[2] == "overlay" {
+			return true
+		}
+	}
+	return false
+}
+
+// mountOverlayService reads overlay.json from servicePath and stacks each
+// listed source directory on top of the corresponding host target using a
+// read-only overlayfs (multiple lowerdirs, no upperdir). After all mounts are
+// applied it optionally runs depmod and udevadm trigger.
+//
+// The extension image stays mounted at extMount for the lifetime of the system,
+// so the source lowerdirs remain accessible indefinitely.
+func mountOverlayService(ctx *externalServicesContext, name, servicePath string) error {
+	spec, err := loadOverlaySpec(filepath.Join(servicePath, "overlay.json"))
+	if err != nil {
+		return fmt.Errorf("load overlay spec: %w", err)
+	}
+
+	runDepmod := false
+	runUdevTrigger := false
+
+	for _, entry := range spec.Overlays {
+		if isOverlayMounted(entry.Target) {
+			log.Noticef("[%s] overlay already mounted at %s, skipping", name, entry.Target)
+			if entry.Depmod {
+				runDepmod = true
+			}
+			if entry.UdevTrigger {
+				runUdevTrigger = true
+			}
+			continue
+		}
+
+		sourcePath := filepath.Join(servicePath, entry.Source)
+		if _, err := os.Stat(sourcePath); err != nil {
+			return fmt.Errorf("overlay source %s not found: %w", sourcePath, err)
+		}
+
+		// Read-only union: extension source takes precedence over existing host dir.
+		// No upperdir/workdir needed for a purely read-only overlay.
+		opts := fmt.Sprintf("lowerdir=%s:%s", sourcePath, entry.Target)
+		if err := syscall.Mount("overlay", entry.Target, "overlay", 0, opts); err != nil {
+			return fmt.Errorf("overlay mount %s -> %s: %w", sourcePath, entry.Target, err)
+		}
+		log.Noticef("[%s] overlay mounted: %s on top of %s", name, sourcePath, entry.Target)
+
+		if entry.Depmod {
+			runDepmod = true
+		}
+		if entry.UdevTrigger {
+			runUdevTrigger = true
+		}
+	}
+
+	if runDepmod {
+		out, err := exec.Command("depmod", "-a").CombinedOutput()
+		if err != nil {
+			log.Warnf("[%s] depmod -a failed: %v; output: %s", name, err, string(out))
+		} else {
+			log.Noticef("[%s] depmod -a completed", name)
+		}
+	}
+
+	if runUdevTrigger {
+		out, err := exec.Command("udevadm", "trigger", "--action=add").CombinedOutput()
+		if err != nil {
+			log.Warnf("[%s] udevadm trigger failed: %v; output: %s", name, err, string(out))
+		} else {
+			log.Noticef("[%s] udevadm trigger completed", name)
+		}
+	}
+
+	return nil
+}
+
+// verifyOverlays checks that all overlay mounts applied by overlay services are
+// still in place and re-applies them if any have disappeared (e.g. after an
+// unexpected umount).
+func verifyOverlays(ctx *externalServicesContext) {
+	for name := range ctx.overlaysMounted {
+		ctx.ps.StillRunning(agentName, warningTime, errorTime)
+		servicePath := filepath.Join(extMount, "containers/services", name)
+		spec, err := loadOverlaySpec(filepath.Join(servicePath, "overlay.json"))
+		if err != nil {
+			log.Errorf("[%s] verifyOverlays: failed to load overlay spec: %v", name, err)
+			continue
+		}
+		for _, entry := range spec.Overlays {
+			if !isOverlayMounted(entry.Target) {
+				log.Warnf("[%s] overlay at %s is gone, re-applying", name, entry.Target)
+				if err := mountOverlayService(ctx, name, servicePath); err != nil {
+					log.Errorf("[%s] failed to re-apply overlay: %v", name, err)
+				}
+				break // mountOverlayService iterates all entries
+			}
+		}
+	}
 }
 
 // isServiceDisabledByConfig checks whether a service should be treated as
