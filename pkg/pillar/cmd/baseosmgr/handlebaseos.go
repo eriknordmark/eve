@@ -246,6 +246,19 @@ func doBaseOsStatusUpdate(ctx *baseOsMgrContext, uuidStr string,
 		return changed
 	}
 
+	// A cross-flavor (EVE-kvm <-> EVE-k) update is allowed above only when the
+	// device has no volumes. The image is now downloaded and verified (the
+	// doBaseOsInstall step waited for ContentTreeStatus); before writing it to
+	// the A/B partition, repartition the boot disk to the EVE-k geometry. The
+	// download must precede this because the shrink path reboots into an offline
+	// resize with no network. Block activation until the geometry is ready.
+	if err == nil && isCurrentKube != isUpdateKube {
+		if !maybeConvert(ctx, status) {
+			changed = true
+			return changed
+		}
+	}
+
 	if !config.Activate {
 		log.Functionf("doBaseOsStatusUpdate(%s) for %s, Activate is not set",
 			config.BaseOsVersion, uuidStr)
