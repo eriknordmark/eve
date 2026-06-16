@@ -113,3 +113,35 @@ for f in 30 50 70 85; do
   sudo ./resize-bench --workdir /var/scratch --persist-size 100G --fill $f --shrink 22G --json
 done
 ```
+
+## TODO: characterize the ext4 shrink floor
+
+The shrink-margin policy in `storage-resizer` (the `--max-full 90` bound) is a
+placeholder, not a measured safe point. `resize2fs` refuses to shrink below a
+filesystem's *minimum* size — data blocks plus non-relocatable metadata (inode
+tables, group descriptors, journal) — which is **not** a fixed percentage: it
+rises with fragmentation and file count, and the metadata floor has a
+size-independent component. Manual runs already hit `New size smaller than
+minimum` and fragmentation failures at fill levels below the nominal margin.
+
+The open question (storage-resizer README, the `--max-full` section): is a single
+percentage enough, or must the bound be a percentage **plus** a fixed reserve
+(some MB that does not scale with size), and does the constant vary across
+`/persist` size, fragmentation, and ext4 feature set? Set up an exploratory sweep
+to find out (unless authoritative ext4 documentation already specifies the
+floor). Vary, independently:
+
+- **fill level**: 30 … 95% in steps, to find where shrink starts failing;
+- **`/persist` size**: 8G, 32G, 64G, 100G, 256G — to separate the
+  size-proportional part of the floor from any fixed component;
+- **fragmentation / aging**: the two-tier mix vs many small files vs an aged
+  filesystem (create+delete churn before filling) — fragmentation raises the
+  relocatable-block count and the floor;
+- **ext4 feature set**: default `mkfs` vs EVE's actual `mkfs.ext4` options, and
+  with/without journal, since features change the metadata footprint.
+
+For each cell capture: `df` used, the `resize2fs -P` reported minimum, the
+*actual* smallest size `resize2fs` accepts (binary-search the target), and
+whether the requested 22 GB shrink succeeds. From the gap between "used" and the
+real floor across the matrix, derive a robust margin model (fixed MB + percent)
+and feed it back into `storage-resizer`'s `check`. Record results in `~/notes/`.

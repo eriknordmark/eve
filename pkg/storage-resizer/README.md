@@ -59,6 +59,21 @@ to free shrinks accordingly, and a too-full device is correctly reported
 flavor). `check --json` reports `usedBytes`, `targetBytes`, `resultPercent`, and
 `maxFullPercent` for visibility.
 
+**TODO — validate the margin empirically.** The 90% default is a placeholder, not
+a measured safe point. `resize2fs` can refuse to shrink well below 100% full —
+its real floor is the *minimum* size (data blocks plus non-relocatable metadata:
+inode tables, group descriptors, journal), which rises with fragmentation and
+with the number of files, and is not a simple percentage. Manual runs already hit
+"New size smaller than minimum" / fragmentation failures at fill levels under the
+nominal margin. We need to determine whether a single `--max-full` percentage is
+sufficient, or whether the bound must be a combination of a percentage *and* a
+fixed reserve (some MB for metadata/journal that does not scale with size), and
+whether the constant differs across `/persist` sizes, fragmentation, and ext4
+feature sets. The deliverable is an **exploratory test sequence** (drive
+`resize-bench` across the matrix below) to characterize the real floor and pick a
+robust policy — unless authoritative documentation of ext4's shrink floor already
+specifies it. See `tests/resize-bench` for the harness and the matrix.
+
 ### backup / restore / cleanup — surviving a persist wipe
 
 All of these write under `/config`, which **must be the CONFIG partition mounted
