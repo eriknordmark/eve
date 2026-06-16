@@ -7,9 +7,24 @@ versus how much work could run online:
 - **SHRINK** — `e2fsck` + `resize2fs` on a filled ext4 `/persist` (P3).
 - **GROW** — `mkfs.fat` ESP2 + copy ESP content (36 MB) + copy each IMGx image (300 MB).
 
-It shells out to the same utilities the real resizer uses (`e2fsprogs`,
-`dosfstools`, `mtools`), so the numbers reflect real tool + I/O cost. The GPT
-partition-table writes themselves are sub-second and excluded.
+It shells out to the same utilities the real resizer uses, so the numbers
+reflect real tool + I/O cost. The GPT partition-table writes themselves are
+sub-second and excluded. Required tools and the Alpine packages that provide
+them:
+
+| tool | Alpine package |
+|------|----------------|
+| `mkfs.ext4`, `e2fsck` | `e2fsprogs` |
+| `resize2fs` | `e2fsprogs-extra` (**not** the base `e2fsprogs`) |
+| `mkfs.fat` / `mkfs.vfat` | `dosfstools` |
+| `mcopy` | `mtools` |
+
+```sh
+apk add e2fsprogs e2fsprogs-extra dosfstools mtools
+```
+
+The tool checks for these at startup and, if any are missing, prints exactly
+which `apk add` to run.
 
 ## Important: measure on real storage
 

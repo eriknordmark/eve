@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -290,21 +291,42 @@ func maybeDropCaches(want, root bool) bool {
 	return true
 }
 
+// toolPackage maps each external tool to the Alpine package that provides it,
+// so a missing-tool error tells the operator exactly what to install. Note that
+// resize2fs lives in e2fsprogs-extra, not the base e2fsprogs package.
+var toolPackage = map[string]string{
+	"mkfs.ext4": "e2fsprogs",
+	"e2fsck":    "e2fsprogs",
+	"resize2fs": "e2fsprogs-extra",
+	"mcopy":     "mtools",
+	"mkfs.fat":  "dosfstools",
+	"mkfs.vfat": "dosfstools",
+}
+
 func checkRequiredTools() error {
 	required := []string{"mkfs.ext4", "e2fsck", "resize2fs", "mcopy"}
 	var missing []string
+	pkgs := map[string]bool{}
 	for _, t := range required {
 		if _, err := exec.LookPath(t); err != nil {
 			missing = append(missing, t)
+			pkgs[toolPackage[t]] = true
 		}
 	}
 	if _, e1 := exec.LookPath("mkfs.fat"); e1 != nil {
 		if _, e2 := exec.LookPath("mkfs.vfat"); e2 != nil {
 			missing = append(missing, "mkfs.fat/mkfs.vfat")
+			pkgs[toolPackage["mkfs.fat"]] = true
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("missing required tools: %s (install e2fsprogs, dosfstools, mtools)", strings.Join(missing, ", "))
+		var names []string
+		for p := range pkgs {
+			names = append(names, p)
+		}
+		sort.Strings(names)
+		return fmt.Errorf("missing required tools: %s (Alpine: apk add %s)",
+			strings.Join(missing, ", "), strings.Join(names, " "))
 	}
 	return nil
 }
