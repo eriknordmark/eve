@@ -28,7 +28,8 @@ package main
 //   - `restore` runs after /persist is mounted again. If the flag file is gone
 //              it garbage-collects any leftover backup dir (so stray /config
 //              files don't perturb the measure-config PCR). If the flag file is
-//              present it copies back missing/changed files, then (with
+//              present it restores the files the shrink lost — those missing,
+//              empty, or invalid for their type (see needsRestore) — then (with
 //              --cleanup) removes the flag file FIRST and the backup dir second,
 //              so a crash mid-cleanup is safe.
 //   - `cleanup` is the idempotent end-of-conversion sweep the caller runs after
@@ -43,11 +44,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // defaultBackupPatterns are globs relative to the persist root. They cover the
@@ -87,7 +89,7 @@ func cmdBackup(args []string) int {
 	}
 	// Write the flag file LAST: the read side treats an absent/empty flag file as
 	// "not started" and ignores a partial backup dir.
-	if err := writeFileSync(*flagFile, []byte(*target+"\n"), 0o644); err != nil {
+	if err := writeFileAtomic(*flagFile, []byte(*target+"\n")); err != nil {
 		fmt.Fprintln(os.Stderr, "backup: write flag file:", err)
 		return 1
 	}
@@ -189,8 +191,8 @@ func backupPersistFiles(persist, backupDir string, patterns []string) (int, erro
 }
 
 // restorePersistFiles walks backupDir and copies each file into persist at the
-// same relative path when it is missing or its content differs. Returns the
-// number of files written.
+// same relative path when the live copy is missing, empty, or fails its content
+// validity check (see needsRestore). Returns the number of files written.
 func restorePersistFiles(backupDir, persist string) (int, error) {
 	if _, err := os.Stat(backupDir); os.IsNotExist(err) {
 		return 0, nil // nothing backed up
@@ -208,20 +210,57 @@ func restorePersistFiles(backupDir, persist string) (int, error) {
 			return err
 		}
 		dst := filepath.Join(persist, rel)
-		same, err := sameContent(path, dst)
+		need, err := needsRestore(rel, dst)
 		if err != nil {
 			return err
 		}
-		if same {
+		if !need {
 			return nil
 		}
-		if err := copyFileSyncMode(path, dst); err != nil {
+		if err := copyFileAtomic(path, dst); err != nil {
 			return err
 		}
 		restored++
 		return nil
 	})
 	return restored, err
+}
+
+// needsRestore reports whether the backed-up file should overwrite the live
+// /persist copy at dst. The live copy is always restored when it is missing or
+// empty (the shrink lost it). When it is present and non-empty we restore only
+// if it fails a per-type validity check, because truncation can leave a
+// non-empty but unusable file that the size check alone would miss:
+//
+//   - certs/keys (*.pem): a valid file ends each block with a "-----END" marker,
+//     so its absence means a truncated/corrupt cert -> restore.
+//   - the DevicePortConfigList (*.json): must parse as JSON; truncation always
+//     yields invalid JSON -> restore.
+//
+// Other backed-up files (the saved config lastconfig/.bak and controllercerts)
+// have no cheap standalone validator here and can be legitimately newer on the
+// live /persist than in the (stale) backup, so a present non-empty copy is kept.
+// pillar validates those itself and falls back to its .bak copies when one is
+// truncated, and both copies are in the backup set for the wiped case.
+func needsRestore(rel, dst string) (bool, error) {
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil // missing
+		}
+		return false, err
+	}
+	if len(data) == 0 {
+		return true, nil // empty / truncated to zero length
+	}
+	switch {
+	case strings.HasSuffix(rel, ".pem"):
+		return !bytes.Contains(data, []byte("-----END")), nil
+	case strings.HasSuffix(rel, ".json"):
+		return !json.Valid(data), nil
+	default:
+		return false, nil // present, non-empty, no validator -> keep the live copy
+	}
 }
 
 // copyTree copies a file, or recursively a directory, from src to dst preserving
@@ -232,7 +271,7 @@ func copyTree(src, dst string) (int, error) {
 		return 0, err
 	}
 	if !info.IsDir() {
-		return 1, copyFileSyncMode(src, dst)
+		return 1, copyFileAtomic(src, dst)
 	}
 	count := 0
 	err = filepath.Walk(src, func(path string, fi os.FileInfo, err error) error {
@@ -246,7 +285,7 @@ func copyTree(src, dst string) (int, error) {
 		if err != nil {
 			return err
 		}
-		if err := copyFileSyncMode(path, filepath.Join(dst, rel)); err != nil {
+		if err := copyFileAtomic(path, filepath.Join(dst, rel)); err != nil {
 			return err
 		}
 		count++
@@ -255,61 +294,62 @@ func copyTree(src, dst string) (int, error) {
 	return count, err
 }
 
-// copyFileSyncMode copies src to dst (creating parent dirs), preserves the mode,
-// and fsyncs dst.
-func copyFileSyncMode(src, dst string) error {
-	info, err := os.Stat(src)
+// copyFileAtomic copies src to dst durably. The backed-up files are small, so it
+// reads src fully and writes it through writeFileAtomic.
+func copyFileAtomic(src, dst string) error {
+	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	defer func() { _ = out.Close() }()
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Sync()
+	return writeFileAtomic(dst, data)
 }
 
-// writeFileSync writes data to path and fsyncs it.
-func writeFileSync(path string, data []byte, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+// writeFileAtomic writes data to dst by streaming into a temp file in the same
+// directory, fsyncing it, atomically renaming it into place, and fsyncing the
+// directory. The rename means a crash leaves either the old file or the complete
+// new one, never a truncated or zero-length file — critical because the shrink
+// flag file gates a destructive repartition and the backup may be the only copy
+// of the device-identity files. (The plain content fsync alone would still let a
+// crash mid-write leave a partial file, and would not make the new directory
+// entry durable.) Temp files are created 0o600, which suits the key material.
+func writeFileAtomic(dst string, data []byte) error {
+	dir := filepath.Dir(dst)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, perm)
+	tmp, err := os.CreateTemp(dir, ".tmp-")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
-	if _, err := f.Write(data); err != nil {
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename succeeds
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
 		return err
 	}
-	return f.Sync()
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		return err
+	}
+	return syncDir(dir)
 }
 
-// sameContent reports whether a (must exist) and b have identical contents. A
-// missing b means "not same" (needs restore).
-func sameContent(a, b string) (bool, error) {
-	bb, err := os.ReadFile(b)
+// syncDir fsyncs a directory so a newly created or renamed entry in it is
+// durable; a file's own fsync persists its data, not its directory entry.
+func syncDir(dir string) error {
+	f, err := os.Open(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
+		return err
 	}
-	ab, err := os.ReadFile(a)
-	if err != nil {
-		return false, err
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
 	}
-	return bytes.Equal(ab, bb), nil
+	return f.Close()
 }

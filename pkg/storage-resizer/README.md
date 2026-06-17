@@ -84,10 +84,16 @@ whose writes are lost on reboot — see the note below).
 device-identity-critical files to `<config-partition>/backup-persist/` and writes
 the `<config-partition>/shrink-persist` flag file (the target size) **last**. If
 the shrink ever has to recreate `/persist` empty,
-`restore` (after `/persist` is remounted) copies back anything missing/changed,
-then `--cleanup` removes the **flag file first, then the backup dir** (the
-reverse of backup's flag-file-last order, so a crash mid-cleanup is safe). The
-flag file gates the backup dir: when the flag file is absent, `restore` instead
+`restore` (after `/persist` is remounted) restores each backed-up file whose live
+copy is **missing, empty, or invalid for its type** — a cert/key missing its
+`-----END` marker, or a DevicePortConfigList that is not valid JSON (truncation
+always breaks both). A present, non-empty mutable file (the saved config
+`lastconfig`/`.bak`, `controllercerts`) is left untouched, since the live copy
+may be a legitimately newer version that the stale backup must not clobber —
+pillar validates those itself and falls back to its `.bak` copies. Then
+`--cleanup` removes the **flag file first, then the backup dir** (the reverse of
+backup's flag-file-last order, so a crash mid-cleanup is safe). The flag file
+gates the backup dir: when the flag file is absent, `restore` instead
 **garbage-collects** any leftover backup dir without restoring — so stray
 `/config` files can't perturb the `measure-config` PCR on the boot that needs the
 vault.

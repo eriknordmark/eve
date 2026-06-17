@@ -102,7 +102,7 @@ type Result struct {
 | `backup` | — | `backed up N file(s)…; wrote <flag-file>=<target>` | 0 / 1 / 2 | `/config/backup-persist/*`, then the `/config/shrink-persist` flag file |
 | `shrink` | — | `shrink <label> to <size>` | 0 / 1 / 2 | shrinks the persist partition, rewrites GPT |
 | `grow` | — | `grow <label>=…` | 0 / 1 / 2 | grows ESP/IMGA/IMGB, rewrites GPT |
-| `restore` | — | `restored N file(s) …` | 0 / 1 | copies files into `/persist`; flag file absent → GCs the backup dir; `--cleanup` removes the flag file then the backup dir |
+| `restore` | — | `restored N file(s) …` | 0 / 1 | restores backed-up files whose live copy is missing/empty/invalid into `/persist`; flag file absent → GCs the backup dir; `--cleanup` removes the flag file then the backup dir |
 | `cleanup` | — | `cleanup: …` on refusal | 0 / 1 | removes the backup dir once the flag file is gone; refuses (exit 1) while the flag file is present |
 
 The `check --json` schema (fields diskconvert reads in **bold**):

@@ -9,15 +9,17 @@ import (
 	"testing"
 )
 
-// the critical files a real EVE /persist would hold (verified paths/names)
+// the critical files a real EVE /persist would hold (verified paths/names).
+// The PEM certs carry a "-----END" marker so they pass the restore validity
+// check; the DPCL is valid JSON.
 var persistFixture = map[string]string{
 	"checkpoint/lastconfig":                       "edgedevconfig-with-ssh-keys",
 	"checkpoint/lastconfig.bak":                   "edgedevconfig-backup",
 	"checkpoint/controllercerts":                  "controller-signing-certs",
-	"certs/ecdh.key.pem":                          "ECDH-PRIVATE-KEY",
-	"certs/ecdh.cert.pem":                         "ECDH-CERT",
-	"certs/attest.cert.pem":                       "ATTEST-CERT",
-	"certs/ek.cert.pem":                           "EK-CERT",
+	"certs/ecdh.key.pem":                          "-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----\n",
+	"certs/ecdh.cert.pem":                         "-----BEGIN CERTIFICATE-----\nBBBB\n-----END CERTIFICATE-----\n",
+	"certs/attest.cert.pem":                       "-----BEGIN CERTIFICATE-----\nCCCC\n-----END CERTIFICATE-----\n",
+	"certs/ek.cert.pem":                           "-----BEGIN CERTIFICATE-----\nDDDD\n-----END CERTIFICATE-----\n",
 	"status/nim/DevicePortConfigList/global.json": `{"dpc":"cellular-fallback"}`,
 	// a file that must NOT be backed up (not in the patterns)
 	"vault/volumes/app1.qcow2": "big-app-volume",
@@ -27,13 +29,24 @@ var persistFixture = map[string]string{
 func writePersist(t *testing.T, root string, files map[string]string) {
 	t.Helper()
 	for rel, content := range files {
-		p := filepath.Join(root, rel)
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
-		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
-			t.Fatalf("write %s: %v", rel, err)
-		}
+		mustWrite(t, filepath.Join(root, rel), content)
+	}
+}
+
+func mustWrite(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func mustRemove(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove %s: %v", path, err)
 	}
 }
 
@@ -99,7 +112,10 @@ func TestRestoreIntoWipedPersist(t *testing.T) {
 	}
 }
 
-func TestRestoreOnlyMissingOrChanged(t *testing.T) {
+// Mutable files (lastconfig, controllercerts) are kept when present and
+// non-empty — they may be a legitimately newer version the stale backup must not
+// clobber — and restored only when missing or empty.
+func TestRestoreKeepsNewerMutableFiles(t *testing.T) {
 	persist := t.TempDir()
 	backup := filepath.Join(t.TempDir(), "backup-persist")
 	writePersist(t, persist, persistFixture)
@@ -107,26 +123,57 @@ func TestRestoreOnlyMissingOrChanged(t *testing.T) {
 		t.Fatalf("backup: %v", err)
 	}
 
-	// fsck passed but left one file truncated and removed another
-	if err := os.WriteFile(filepath.Join(persist, "checkpoint/lastconfig"), []byte("corrupted"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(persist, "certs/ecdh.key.pem")); err != nil {
-		t.Fatal(err)
-	}
+	// lastconfig was updated after the backup: a non-empty, legitimately newer file.
+	newer := "edgedevconfig-NEWER-than-backup"
+	mustWrite(t, filepath.Join(persist, "checkpoint/lastconfig"), newer)
+	// controllercerts went missing entirely.
+	mustRemove(t, filepath.Join(persist, "checkpoint/controllercerts"))
 
 	restored, err := restorePersistFiles(backup, persist)
 	if err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	if restored != 2 {
-		t.Errorf("restored %d, want 2 (the changed + the missing)", restored)
+	if restored != 1 {
+		t.Errorf("restored %d, want 1 (only the missing controllercerts)", restored)
 	}
-	if got, _ := os.ReadFile(filepath.Join(persist, "checkpoint/lastconfig")); string(got) != persistFixture["checkpoint/lastconfig"] {
-		t.Errorf("lastconfig not restored to original")
+	if got, _ := os.ReadFile(filepath.Join(persist, "checkpoint/lastconfig")); string(got) != newer {
+		t.Errorf("newer lastconfig was clobbered by the stale backup: got %q", got)
 	}
-	if got, _ := os.ReadFile(filepath.Join(persist, "certs/ecdh.key.pem")); string(got) != persistFixture["certs/ecdh.key.pem"] {
-		t.Errorf("ecdh.key.pem not restored")
+	if got, _ := os.ReadFile(filepath.Join(persist, "checkpoint/controllercerts")); string(got) != persistFixture["checkpoint/controllercerts"] {
+		t.Errorf("missing controllercerts not restored")
+	}
+}
+
+// Files with a format validator are restored when the live copy is non-empty but
+// malformed (truncation the size check alone would miss): a cert without its
+// "-----END" marker, or a DPCL that is not valid JSON.
+func TestRestoreRepairsTruncatedValidatedFiles(t *testing.T) {
+	persist := t.TempDir()
+	backup := filepath.Join(t.TempDir(), "backup-persist")
+	writePersist(t, persist, persistFixture)
+	if _, err := backupPersistFiles(persist, backup, defaultBackupPatterns); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+
+	// ecdh key truncated: non-empty but missing the END marker -> restore.
+	mustWrite(t, filepath.Join(persist, "certs/ecdh.key.pem"), "-----BEGIN EC PRIVATE KEY-----\nAAA")
+	// DPCL truncated: non-empty but invalid JSON -> restore.
+	mustWrite(t, filepath.Join(persist, "status/nim/DevicePortConfigList/global.json"), `{"dpc":`)
+	// attest cert went missing -> restore.
+	mustRemove(t, filepath.Join(persist, "certs/attest.cert.pem"))
+	// ek.cert.pem and ecdh.cert.pem are intact (have END) -> kept.
+
+	restored, err := restorePersistFiles(backup, persist)
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if restored != 3 {
+		t.Errorf("restored %d, want 3 (truncated key + invalid JSON + missing cert)", restored)
+	}
+	for _, rel := range []string{"certs/ecdh.key.pem", "status/nim/DevicePortConfigList/global.json", "certs/attest.cert.pem"} {
+		if got, _ := os.ReadFile(filepath.Join(persist, rel)); string(got) != persistFixture[rel] {
+			t.Errorf("%s not restored to the backup copy", rel)
+		}
 	}
 }
 
