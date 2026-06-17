@@ -153,6 +153,83 @@ is_first_boot_eval_eve() {
     return 1
 }
 
+# --- EVE-kvm <-> EVE-k boot-disk conversion (storage-resizer) -----------------
+# baseosmgr (online) decides a flavor switch needs more room for the larger
+# ESP/IMGA/IMGB, backs up the connectivity- and device-identity-critical files to
+# the CONFIG partition, writes the /config/shrink-persist flag file, and reboots.
+# Here, with /persist still unmounted, we run the offline shrink+grow; after
+# /persist is mounted we restore anything the shrink lost and clean up.
+# See pkg/pillar/docs/diskconvert.md and pkg/storage-resizer/README.md.
+
+# disk_of_partlabel echoes the whole-disk device (e.g. /dev/sda) carrying the
+# partition with the given GPT label, or nothing if not found.
+disk_of_partlabel() {
+    _part=$(findfs PARTLABEL="$1") || return 1
+    [ -n "$_part" ] || return 1
+    _sys=$(echo /sys/block/*/"${_part#/dev/}")
+    echo "/dev/$(echo "$_sys" | cut -f4 -d/)"
+}
+
+# maybe_offline_disk_resize runs the shrink+grow while /persist is unmounted, gated on
+# the shrink flag file baseosmgr left on the CONFIG copy. The shrink cannot run
+# with /persist mounted and, in the worst case (an unrecoverable fs), can lose
+# /persist — hence the prior backup and the restore below; the grow is never
+# destructive. Only the flag is read here (reads from the read-only tmpfs /config
+# are fine); the durable flag/backup removal happens in maybe_restore_after_persist
+# against the CONFIG partition mounted read-write. Each step re-plans from the
+# live GPT, so a crash is recovered by re-running on the next boot.
+maybe_offline_disk_resize() {
+    [ -f "$CONFIGDIR/shrink-persist" ] || return 0
+    _bootdev=$(disk_of_partlabel IMGA) || _bootdev=""
+    if [ -z "$_bootdev" ]; then
+        echo "$(date -Ins -u) storage-resizer: cannot find boot disk (IMGA); skipping shrink"
+        return 1
+    fi
+    echo "$(date -Ins -u) storage-resizer: shrink+grow requested on $_bootdev"
+    if ! storage-resizer shrink --disk "$_bootdev" --flag-file "$CONFIGDIR/shrink-persist" --fix-errors; then
+        echo "$(date -Ins -u) storage-resizer: shrink failed on $_bootdev"
+        return 1
+    fi
+    if ! storage-resizer grow --disk "$_bootdev" --fix-errors; then
+        echo "$(date -Ins -u) storage-resizer: grow failed on $_bootdev"
+        return 1
+    fi
+    partprobe "$_bootdev"
+    echo "$(date -Ins -u) storage-resizer: repartition complete on $_bootdev"
+}
+
+# maybe_restore_after_persist restores the backed-up files into the freshly mounted
+# /persist (needed only when the shrink had to recreate /persist empty) and then
+# cleans up. It mounts the CONFIG partition READ-WRITE because the runtime
+# /config is a read-only tmpfs RAM copy whose writes are lost on reboot, so the
+# flag/backup removal must land on the real partition. Skipped when there is
+# nothing to do (no flag and no leftover backup dir in the CONFIG copy).
+maybe_restore_after_persist() {
+    [ -e "$CONFIGDIR/shrink-persist" ] || [ -e "$CONFIGDIR/backup-persist" ] || return 0
+    _cfgpart=$(findfs PARTLABEL=CONFIG) || _cfgpart=""
+    if [ -z "$_cfgpart" ]; then
+        echo "$(date -Ins -u) storage-resizer: no CONFIG partition; cannot restore/cleanup"
+        return 1
+    fi
+    _cfgrw=/tmp/config_rw
+    mkdir -p "$_cfgrw"
+    if ! mount -t vfat -o rw,iocharset=iso8859-1 "$_cfgpart" "$_cfgrw"; then
+        echo "$(date -Ins -u) storage-resizer: mount $_cfgpart rw failed"
+        return 1
+    fi
+    # restore self-gates on the flag file: present -> restore the files the shrink
+    # lost (missing, empty, or invalid for their type) then remove the flag file
+    # (first) and the backup dir; absent -> GC any leftover backup dir. cleanup is
+    # the idempotent sweep for a crash that cleared the flag but left the dir; it
+    # refuses while the flag is still present.
+    storage-resizer restore --persist "$PERSISTDIR" \
+        --backup-dir "$_cfgrw/backup-persist" --flag-file "$_cfgrw/shrink-persist" --cleanup
+    storage-resizer cleanup \
+        --backup-dir "$_cfgrw/backup-persist" --flag-file "$_cfgrw/shrink-persist"
+    sync
+    umount "$_cfgrw"
+}
+
 if is_first_boot_virt_eve || is_first_boot_eval_eve; then
    DEV=$(echo /sys/block/*/"${IMGA#/dev/}")
    DEV="/dev/$(echo "$DEV" | cut -f4 -d/)"
@@ -215,6 +292,10 @@ if is_first_boot_virt_eve || is_first_boot_eval_eve; then
       dd if=/dev/zero of="$P3" bs=512 seek=$(( $(blockdev --getsz "$P3") - 10240 )) count=10240 2>/dev/null
    fi
 fi
+
+# If baseosmgr requested an EVE-kvm<->EVE-k repartition, do the offline
+# shrink+grow now while /persist is still unmounted, before the P3 fsck/mount.
+maybe_offline_disk_resize
 
 # We support P3 partition either formatted as ext3/4 or as part of ZFS pool
 # Priorities are: ext3, ext4, zfs
@@ -296,6 +377,10 @@ else
         echo "$(date -Ins -u) No separate $PERSISTDIR partition"
     fi
 fi
+
+# /persist is now mounted (if present): restore any files the conversion shrink
+# may have lost and clean up the backup/flag on the CONFIG partition.
+maybe_restore_after_persist
 
 zfs_set_arc_limits
 

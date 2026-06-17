@@ -149,6 +149,7 @@ fi
 FROM lfedge/eve-fscrypt:d528516ed00f61a5ba4ba2407ab3a94bd55aff90 AS fscrypt
 FROM lfedge/eve-dnsmasq:66334faad5620503b542c8faa2012c3697659ce2 AS dnsmasq
 FROM lfedge/eve-gpt-tools:8e4f3e10e861373aa269b3ebeef483153f3399dc AS gpttools
+FROM lfedge/eve-storage-resizer:f57b7647247a35a0281c17086b12ab6931dbd893 AS storage-resizer
 
 # collector collects everything together and then does any processing like stripping binaries.
 # We use this interim "collector" so that we can do processing.
@@ -172,6 +173,9 @@ COPY --from=zfs /out /out
 COPY --from=fscrypt /opt/zededa/bin /out/opt/zededa/bin
 COPY --from=gpttools / /out
 COPY --from=dnsmasq /usr/sbin/dnsmasq /out/opt/zededa/bin/dnsmasq
+# baseosmgr execs /usr/bin/storage-resizer for the online check/backup/grow steps
+# of the EVE-kvm<->EVE-k boot-disk conversion (pkg/pillar/diskconvert).
+COPY --from=storage-resizer /usr/bin/storage-resizer /out/usr/bin/storage-resizer
 # we use final directory and move the line to the bottom
 # to avoid conflicts and speedup re-builds
 COPY --from=build /final /out
