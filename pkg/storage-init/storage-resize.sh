@@ -185,6 +185,10 @@ maybe_offline_disk_resize() {
             log "storage-resizer: shrink failed (rc=$_rc) on $_bootdev; aborting resize"
             resize_abort "shrink" "$_rc"
         fi
+        # Timestamped boundary between shrink and grow: log() prefixes the time,
+        # so this lets the analyzer split per-attempt shrink vs grow duration
+        # (the resizer's own "shrink complete"/"grow ..." lines are unprefixed).
+        log "storage-resizer: shrink step done (attempt $((_n + 1))); starting grow"
     fi
     storage-resizer grow --disk "$_bootdev" --fix-errors >/dev/console 2>&1
     _rc=$?
