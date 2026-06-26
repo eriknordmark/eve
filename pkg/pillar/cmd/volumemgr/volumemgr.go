@@ -62,6 +62,7 @@ type volumemgrContext struct {
 	pubResolveConfig        pubsub.Publication
 	subContentTreeConfig    pubsub.Subscription
 	pubContentTreeStatus    pubsub.Publication
+	pubDeferredDelete       pubsub.Publication
 	subVolumeConfig         pubsub.Subscription
 	pubVolumeStatus         pubsub.Publication
 	subVolumeRefConfig      pubsub.Subscription
@@ -395,6 +396,19 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	}
 	ctx.pubContentTreeToHash = pubContentTreeToHash
 
+	// Persistent so a deferred content-tree delete survives a reboot (e.g. the
+	// EVE-kvm->EVE-k boot-disk conversion); the boot-time GC keeps the listed
+	// blobs/image until the deferral expires.
+	pubDeferredDelete, err := ps.NewPublication(pubsub.PublicationOptions{
+		AgentName:  agentName,
+		Persistent: true,
+		TopicType:  types.DeferredContentDeleteStatus{},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	ctx.pubDeferredDelete = pubDeferredDelete
+
 	pubBlobStatus, err := ps.NewPublication(
 		pubsub.PublicationOptions{
 			AgentName: agentName,
@@ -700,6 +714,23 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	ctx.diskMetricsTickerHandle = <-diskMetricsTickerHandle
 
 	for {
+		// Apply any pending global config BEFORE servicing other subscriptions.
+		// When the controller raises timer.defer.content.delete and deletes an
+		// app in the same config update, the ConfigItemValueMap change and the
+		// ContentTreeConfig delete both arrive in our channels; Go select order
+		// is nondeterministic, so without this the delete can be handled while
+		// deferContentDelete is still 0, taking the IMMEDIATE branch in
+		// deleteContentTree and GC-ing the content's blobs the operator meant to
+		// retain (forcing a re-download on the next deploy). Draining the
+		// global-config channel first applies the new deferContentDelete before
+		// any delete in the same batch.
+		select {
+		case change := <-ctx.subGlobalConfig.MsgChan():
+			ctx.subGlobalConfig.ProcessChange(change)
+			continue
+		default:
+		}
+
 		select {
 		case change := <-ctx.subGlobalConfig.MsgChan():
 			ctx.subGlobalConfig.ProcessChange(change)
