@@ -99,20 +99,26 @@ func cmdRunWatchdog(args []string) int {
 }
 
 // escalatedTimeout grows the (no-pet) watchdog timeout with the resize attempt:
-// short and random early so a hung resize is reset quickly, widening on retries
-// so a slow-but-progressing one eventually gets an uninterrupted window, and
-// effectively non-firing by the 4th try. The iTCO is two-stage, so the real
-// reset is ~2x these values; tuned against a ~minute shrink+grow. Randomized so
-// repeated stress runs vary which step gets cut.
+// very short and random early so even a fast step (e.g. the resize2fs shrink on a
+// well-filled /persist) is cut, widening on retries so a slow-but-progressing one
+// eventually gets an uninterrupted window, and effectively non-firing from the 6th
+// try. The iTCO is two-stage, so the real reset is ~2x these values. Starting at
+// ~1s and staying low for five attempts makes fires land across BOTH the shrink and
+// the grow (not just the grow) so the shrink-interruption recovery path is
+// exercised; randomized so repeated stress runs vary which step gets cut.
 func escalatedTimeout(attempt int) int {
 	switch {
 	case attempt <= 0:
-		return 5 + rand.IntN(6) // set 5-10 -> reset ~10-20s: fires early in the shrink
+		return 1 + rand.IntN(2) // set 1-2 -> reset ~2-4s: fires almost immediately (in the shrink)
 	case attempt == 1:
-		return 10 + rand.IntN(11) // set 10-20 -> reset ~20-40s: fires
+		return 2 + rand.IntN(3) // set 2-4 -> reset ~4-8s: fires
 	case attempt == 2:
-		return 22 + rand.IntN(22) // set 22-43 -> reset ~44-86s: fires (< the ~90s resize)
+		return 4 + rand.IntN(5) // set 4-8 -> reset ~8-16s: fires
+	case attempt == 3:
+		return 8 + rand.IntN(9) // set 8-16 -> reset ~16-32s: fires
+	case attempt == 4:
+		return 16 + rand.IntN(17) // set 16-32 -> reset ~32-64s: fires
 	default:
-		return 600 // 4th run onward: ~1200s reset; won't fire, the resize completes
+		return 600 // 6th run onward: ~1200s reset; won't fire, the resize completes
 	}
 }
