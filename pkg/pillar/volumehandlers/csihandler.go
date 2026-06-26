@@ -249,12 +249,22 @@ func (handler *volumeHandlerCSI) CreateVolume() (string, error) {
 				return pvcName, err
 			}
 		} else {
-			qcowFile, err := handler.getVolumeFilePath()
-			if err != nil {
-				errStr := fmt.Sprintf("Error obtaining file for PVC at volume %s, error=%v",
-					pvcName, err)
-				handler.log.Error(errStr)
-				return pvcName, errors.New(errStr)
+			// On a device upgraded from EVE-kvm, prefer the carried-over volume
+			// file (relocated to /persist/vault/volumes-kvm by upgradeconverter)
+			// so app-written data survives the conversion instead of being
+			// regenerated from the image.
+			qcowFile := handler.kvmMigratedSourcePath()
+			if qcowFile != "" {
+				handler.log.Noticef("CreateVolume: migrating carried-over EVE-kvm volume %s into PVC %s (preserving app data)",
+					qcowFile, pvcName)
+			} else {
+				qcowFile, err = handler.getVolumeFilePath()
+				if err != nil {
+					errStr := fmt.Sprintf("Error obtaining file for PVC at volume %s, error=%v",
+						pvcName, err)
+					handler.log.Error(errStr)
+					return pvcName, errors.New(errStr)
+				}
 			}
 			// Convert qcow2 to PVC
 			err = kubeapi.RolloutDiskToPVC(createContext, handler.log, pvcExists, qcowFile, pvcName, false, pvcSize, storageClassName)
@@ -265,6 +275,16 @@ func (handler *volumeHandlerCSI) CreateVolume() (string, error) {
 				handler.log.Error(err)
 				return pvcName, err
 			}
+		}
+	} else if src := handler.kvmMigratedSourcePath(); src != "" {
+		// Blank/data volume carried over from EVE-kvm: migrate its bytes into the
+		// PVC so the data survives the conversion rather than starting empty.
+		handler.log.Noticef("CreateVolume: migrating carried-over EVE-kvm data volume %s into PVC %s (preserving app data)",
+			src, pvcName)
+		if err := kubeapi.RolloutDiskToPVC(createContext, handler.log, false, src, pvcName, false, pvcSize, storageClassName); err != nil {
+			errStr := fmt.Sprintf("Error converting %s to PVC %s: %v", src, pvcName, err)
+			handler.log.Error(errStr)
+			return pvcName, errors.New(errStr)
 		}
 	} else {
 		err := kubeapi.CreatePVC(pvcName, pvcSize, handler.log, storageClassName)
@@ -277,6 +297,30 @@ func (handler *volumeHandlerCSI) CreateVolume() (string, error) {
 
 	handler.log.Functionf("CreateVolume(%s) DONE", pvcName)
 	return pvcName, nil
+}
+
+// kvmMigratedSourcePath returns the path of a carried-over EVE-kvm app-volume
+// file whose bytes should populate this PVC, or "" if none exists. On a device
+// upgraded from EVE-kvm, upgradeconverter relocates the encrypted app volumes
+// out of the Longhorn-owned VolumeEncryptedDirName into a sibling
+// "<...>/volumes-kvm" holding dir (matching the relocate handler's
+// kvmVolumesHoldingDirName); clear volumes stay in place under
+// VolumeClearDirName. Rolling that file into the PVC preserves app-written data
+// instead of regenerating the volume from its image. Container volumes are
+// rebuilt from the preserved containerd content, so they are excluded.
+func (handler *volumeHandlerCSI) kvmMigratedSourcePath() string {
+	if handler.status.IsContainer() {
+		return ""
+	}
+	base := filepath.Base(handler.status.PathName())
+	cand := filepath.Join(types.VolumeClearDirName, base)
+	if handler.status.Encrypted {
+		cand = filepath.Join(types.VolumeEncryptedDirName+"-kvm", base)
+	}
+	if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
+		return cand
+	}
+	return ""
 }
 
 func (handler *volumeHandlerCSI) DestroyVolume() (string, error) {
