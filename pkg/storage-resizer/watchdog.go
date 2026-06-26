@@ -98,27 +98,25 @@ func cmdRunWatchdog(args []string) int {
 	}
 }
 
-// escalatedTimeout grows the (no-pet) watchdog timeout with the resize attempt:
-// very short and random early so even a fast step (e.g. the resize2fs shrink on a
-// well-filled /persist) is cut, widening on retries so a slow-but-progressing one
-// eventually gets an uninterrupted window, and effectively non-firing from the 6th
-// try. The iTCO is two-stage, so the real reset is ~2x these values. Starting at
-// ~1s and staying low for five attempts makes fires land across BOTH the shrink and
-// the grow (not just the grow) so the shrink-interruption recovery path is
-// exercised; randomized so repeated stress runs vary which step gets cut.
+// escalatedTimeout spreads the (no-pet) watchdog timeout LINEARLY across the
+// resize attempts, from ~5s up to ~300s in ~30s steps. A linear ramp (not
+// binary-exponential) keeps steps from jumping over the grow window. The iTCO is
+// two-stage, so the device actually RESETS at ~2x these values; the ~5s floor
+// stays above the driver's ~3s minimum (a smaller request is silently rejected
+// and the 30s default kept). The filled-/persist resize is ~shrink 130s + grow
+// 135s ~= 265s, so by RESET: <130s cuts the SHRINK, 130-265s cuts the GROW, and
+// >265s (set >= ~140) lets shrink+grow finish -- so fires land across BOTH steps
+// and later attempts converge. Top 300s (~5min) is the converge window.
+// Jittered so repeated stress runs vary which point of each step gets cut.
 func escalatedTimeout(attempt int) int {
-	switch {
-	case attempt <= 0:
-		return 1 + rand.IntN(2) // set 1-2 -> reset ~2-4s: fires almost immediately (in the shrink)
-	case attempt == 1:
-		return 2 + rand.IntN(3) // set 2-4 -> reset ~4-8s: fires
-	case attempt == 2:
-		return 4 + rand.IntN(5) // set 4-8 -> reset ~8-16s: fires
-	case attempt == 3:
-		return 8 + rand.IntN(9) // set 8-16 -> reset ~16-32s: fires
-	case attempt == 4:
-		return 16 + rand.IntN(17) // set 16-32 -> reset ~32-64s: fires
-	default:
-		return 600 // 6th run onward: ~1200s reset; won't fire, the resize completes
+	// set: 5 35 65 95 125 | 155 185 215 245 300  (reset ~= 2x)
+	// step: SHRINK SHRINK GROW GROW GROW | converge...
+	sets := []int{5, 35, 65, 95, 125, 155, 185, 215, 245, 300}
+	if attempt < 0 {
+		attempt = 0
 	}
+	if attempt >= len(sets) {
+		return 300
+	}
+	return sets[attempt] + rand.IntN(10)
 }

@@ -21,18 +21,23 @@ func TestRunWatchdogNoDevice(t *testing.T) {
 	}
 }
 
-// TestEscalatedTimeout: the no-pet stress timeout grows with the attempt and is
-// random within each band, starting at ~1s so a fast shrink is cut and reaching
-// the effectively-non-firing 600s from the 6th try (attempt index 5).
+// TestEscalatedTimeout: the no-pet stress timeout is spread LINEARLY from ~5s to
+// ~300s in ~30s steps (jittered), so fires sweep the shrink then the grow before
+// later attempts converge; it caps at 300s for attempts past the table.
 func TestEscalatedTimeout(t *testing.T) {
 	cases := []struct{ attempt, lo, hi int }{
-		{0, 1, 2},
-		{1, 2, 4},
-		{2, 4, 8},
-		{3, 8, 16},
-		{4, 16, 32},
-		{5, 600, 600},
-		{6, 600, 600},
+		{0, 5, 14},
+		{1, 35, 44},
+		{2, 65, 74},
+		{3, 95, 104},
+		{4, 125, 134},
+		{5, 155, 164},
+		{6, 185, 194},
+		{7, 215, 224},
+		{8, 245, 254},
+		{9, 300, 309},
+		{10, 300, 300},
+		{15, 300, 300},
 	}
 	for _, c := range cases {
 		for i := 0; i < 500; i++ {
