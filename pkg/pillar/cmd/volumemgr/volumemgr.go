@@ -714,6 +714,23 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	ctx.diskMetricsTickerHandle = <-diskMetricsTickerHandle
 
 	for {
+		// Apply any pending global config BEFORE servicing other subscriptions.
+		// When the controller raises timer.defer.content.delete and deletes an
+		// app in the same config update, the ConfigItemValueMap change and the
+		// ContentTreeConfig delete both arrive in our channels; Go select order
+		// is nondeterministic, so without this the delete can be handled while
+		// deferContentDelete is still 0, taking the IMMEDIATE branch in
+		// deleteContentTree and GC-ing the content's blobs the operator meant to
+		// retain (forcing a re-download on the next deploy). Draining the
+		// global-config channel first applies the new deferContentDelete before
+		// any delete in the same batch.
+		select {
+		case change := <-ctx.subGlobalConfig.MsgChan():
+			ctx.subGlobalConfig.ProcessChange(change)
+			continue
+		default:
+		}
+
 		select {
 		case change := <-ctx.subGlobalConfig.MsgChan():
 			ctx.subGlobalConfig.ProcessChange(change)
