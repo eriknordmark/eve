@@ -18,6 +18,7 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/diskmetrics"
 	"github.com/lf-edge/eve/pkg/pillar/types"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -43,6 +44,15 @@ func CreatePVC(pvcName string, size uint64, log *base.LogObject, storageClass st
 	result, err := clientset.CoreV1().PersistentVolumeClaims(pvc.Namespace).
 		Create(context.Background(), pvc, metav1.CreateOptions{})
 	if err != nil {
+		if k8serrors.IsAlreadyExists(err) {
+			// Idempotent: a prior attempt (e.g. one that created the PVC but
+			// then failed at the CDI upload because the cluster was not ready)
+			// already left this PVC. Treat it as success so a retry proceeds to
+			// the image upload against the existing PVC (RolloutDiskToPVC then
+			// uses --no-create) instead of dying here with AlreadyExists.
+			log.Noticef("CreatePVC: PVC %s already exists, reusing it", pvcName)
+			return nil
+		}
 		err = fmt.Errorf("failed to CreatePVC %s: %v", pvcName, err)
 		log.Error(err)
 		return err
