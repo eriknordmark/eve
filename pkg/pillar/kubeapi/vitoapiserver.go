@@ -62,6 +62,36 @@ func CreatePVC(pvcName string, size uint64, log *base.LogObject, storageClass st
 	return nil
 }
 
+// ClusterStorageReadyForVolumes reports whether the EVE-k cluster storage stack is
+// ready to create app volumes: the `longhorn` StorageClass exists and the CDI upload
+// proxy Service has a ClusterIP. Callers use this to DEFER volume creation quietly
+// until longhorn/CDI are up (common for tens of minutes right after a kvm->k
+// conversion), instead of attempting and failing with "storageclass not found" /
+// "no upload pod annotation". Best-effort: any API error or missing component => not
+// ready (false).
+func ClusterStorageReadyForVolumes(log *base.LogObject) bool {
+	clientset, err := GetClientSet()
+	if err != nil {
+		log.Functionf("ClusterStorageReadyForVolumes: no clientset yet: %v", err)
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := clientset.StorageV1().StorageClasses().
+		Get(ctx, VolumeCSIClusterStorageClass, metav1.GetOptions{}); err != nil {
+		log.Functionf("ClusterStorageReadyForVolumes: StorageClass %s not ready: %v",
+			VolumeCSIClusterStorageClass, err)
+		return false
+	}
+	svc, err := clientset.CoreV1().Services("cdi").
+		Get(ctx, "cdi-uploadproxy", metav1.GetOptions{})
+	if err != nil || svc.Spec.ClusterIP == "" {
+		log.Functionf("ClusterStorageReadyForVolumes: cdi-uploadproxy not ready: %v", err)
+		return false
+	}
+	return true
+}
+
 // DeletePVC : deletes PVC of the given name.
 func DeletePVC(pvcName string, log *base.LogObject) error {
 	// Get the Kubernetes clientset
