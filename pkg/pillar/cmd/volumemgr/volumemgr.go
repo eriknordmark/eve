@@ -752,7 +752,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 			retryFailedClusterVolumeCreate(&ctx)
 			// Re-drive volumes deferred pre-create (waiting on EVE-k cluster
 			// storage readiness) so they proceed once longhorn/CDI come up.
-			maybeSpaceAvailable(&ctx)
+			reevaluatePendingVolumes(&ctx)
 			ps.CheckMaxTimeTopic(agentName, "gc", start,
 				warningTime, errorTime)
 
