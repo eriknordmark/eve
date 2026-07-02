@@ -62,13 +62,27 @@ func CreatePVC(pvcName string, size uint64, log *base.LogObject, storageClass st
 	return nil
 }
 
+// cdiControlPlaneDeployments are the CDI Deployments (namespace "cdi") that must
+// each have an available replica before a CDI image upload can succeed.
+var cdiControlPlaneDeployments = []string{"cdi-apiserver", "cdi-deployment", "cdi-uploadproxy"}
+
 // ClusterStorageReadyForVolumes reports whether the EVE-k cluster storage stack is
-// ready to create app volumes: the `longhorn` StorageClass exists and the CDI upload
-// proxy Service has a ClusterIP. Callers use this to DEFER volume creation quietly
-// until longhorn/CDI are up (common for tens of minutes right after a kvm->k
-// conversion), instead of attempting and failing with "storageclass not found" /
-// "no upload pod annotation". Best-effort: any API error or missing component => not
-// ready (false).
+// ready to create app volumes: the `longhorn` StorageClass exists, the CDI upload
+// proxy Service has a ClusterIP, and the CDI control-plane Deployments
+// (cdi-apiserver, cdi-deployment, cdi-uploadproxy) each have at least one available
+// replica. Callers use this to DEFER volume creation quietly until longhorn/CDI are
+// up -- which can take tens of minutes whenever an app volume is requested while the
+// EVE-k cluster is still coming up: on a freshly installed node's first boot when the
+// controller's EdgeDevConfig already contains the app instance, or in the minutes
+// after a kvm->k conversion. Without the gate these attempts fail with "storageclass
+// not found" / "no upload pod annotation" / RolloutDiskToPVC "attempts to upload
+// image failed".
+//
+// The uploadproxy ClusterIP is assigned at Service creation, well before the CDI
+// pods are Ready and before CDI can create/annotate a per-PVC upload pod, so the
+// Service check alone is necessary but NOT sufficient; the Deployment-availability
+// check closes that gap so RolloutDiskToPVC's upload is not attempted prematurely.
+// Best-effort: any API error or missing/unavailable component => not ready (false).
 func ClusterStorageReadyForVolumes(log *base.LogObject) bool {
 	clientset, err := GetClientSet()
 	if err != nil {
@@ -86,8 +100,19 @@ func ClusterStorageReadyForVolumes(log *base.LogObject) bool {
 	svc, err := clientset.CoreV1().Services("cdi").
 		Get(ctx, "cdi-uploadproxy", metav1.GetOptions{})
 	if err != nil || svc.Spec.ClusterIP == "" {
-		log.Functionf("ClusterStorageReadyForVolumes: cdi-uploadproxy not ready: %v", err)
+		log.Functionf("ClusterStorageReadyForVolumes: cdi-uploadproxy Service not ready: %v", err)
 		return false
+	}
+	// A ClusterIP alone does not mean CDI can serve an upload: require the CDI
+	// control-plane Deployments to each have an available replica so the upload
+	// pod can be created and annotated before RolloutDiskToPVC attempts the upload.
+	for _, dep := range cdiControlPlaneDeployments {
+		d, err := clientset.AppsV1().Deployments("cdi").Get(ctx, dep, metav1.GetOptions{})
+		if err != nil || d.Status.AvailableReplicas < 1 {
+			log.Functionf("ClusterStorageReadyForVolumes: CDI deployment %s not available yet: %v",
+				dep, err)
+			return false
+		}
 	}
 	return true
 }
