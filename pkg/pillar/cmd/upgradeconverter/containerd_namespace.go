@@ -109,6 +109,8 @@ func portContainerdNamespace(dbPath, sentinelPath, fromNamespace, toNamespace st
 		log.Noticef("portContainerdNamespace: %s does not exist (fresh install); marking done",
 			dbPath)
 		return writeSentinel(sentinelPath)
+	} else if err != nil {
+		return fmt.Errorf("portContainerdNamespace: stat %s: %w", dbPath, err)
 	}
 
 	db, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 5 * time.Second})
