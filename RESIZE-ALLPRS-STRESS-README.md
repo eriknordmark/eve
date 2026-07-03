@@ -1,4 +1,4 @@
-# resize-allprs — multi-PR integration branch
+# resize-allprs-stress — resize-allprs + watchdog fault-injection
 
 Integration vehicle for testing the EVE-kvm↔EVE-k boot-disk resize/conversion
 work together with its dependency chain and the relevant independent PRs. **Not
@@ -39,3 +39,9 @@ Merging #6036 collided on the 4 shared base commits it duplicates with #6063:
 - `upgradeconverter/containerd_namespace.go` — took #6036 (adds `stat` error handling).
 - `volumemgr/handlevolume.go` — took #6036 (`restartCount == 1` guard on SignalRestarted).
 - `baseosmgr/handlebaseos.go` — kept HEAD (fork#4 gate-on-shrink logic supersedes #6036's simple block-when-volumes-exist).
+
+## Additionally included
+
+| PR | branch | role |
+|----|--------|------|
+| fork#7 | resize-watchdog-stress | [DO NOT MERGE] storage-init no-pet fault-injection stress watchdog |
