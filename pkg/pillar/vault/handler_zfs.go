@@ -101,11 +101,29 @@ func (h *ZFSHandler) SetupDefaultVault() error {
 		if base.IsHVTypeKube() {
 			if zfs.DatasetExist(h.log, types.SealedDataset) {
 				// A device converted from EVE-kvm carries a filesystem-dataset
-				// vault here, not the native EVE-k zvol. Mount by the actual
-				// dataset type so a converted no-TPM device still boots on its
-				// carried-over vault. (The TPM path additionally migrates the
-				// fs vault to the zvol layout in unlockVault; field devices use
-				// the TPM path.)
+				// vault here, not the native EVE-k zvol+etcd layout. Migrate it
+				// so a converted no-TPM device ends up with the same layout a
+				// fresh EVE-k install has, including the etcd-storage zvol. Once
+				// migrated the vault is a zvol and we just mount it. (Field
+				// devices take the TPM path in unlockVault instead.)
+				isZvol, err := zfs.IsDatasetTypeZvol(types.SealedDataset)
+				if err != nil {
+					return fmt.Errorf("error checking vault dataset type for %s: %v",
+						types.SealedDataset, err)
+				}
+				if vaultNeedsZvolMigration(true, isZvol) {
+					// Mount the carried-over fs vault as the copy source, then
+					// migrate to the zvol layout unencrypted: no-TPM ZFS vaults
+					// carry no key.
+					if mounted, merr := zfs.IsDatasetMounted(types.SealedDataset); merr != nil {
+						return merr
+					} else if !mounted {
+						if err := zfs.MountDataset(types.SealedDataset); err != nil {
+							return err
+						}
+					}
+					return h.migrateVaultFsToZvol(types.SealedDataset, "", false)
+				}
 				return h.mountVaultByDatasetType(types.SealedDataset)
 			}
 			if err := CreateZvolEtcd(h.log, types.EtcdZvol, "", false); err != nil {
@@ -178,7 +196,7 @@ func (h *ZFSHandler) unlockVault(vaultPath string) error {
 					return err
 				}
 			}
-			return h.migrateVaultFsToZvol(vaultPath)
+			return h.migrateVaultFsToZvol(vaultPath, zfsKeyFile, true)
 		}
 		// Native EVE-k zvol vault.
 		// zfs load-key here separately for types.EtcdZvol because we don't mount it here, only in kube.
@@ -235,18 +253,19 @@ func (h *ZFSHandler) mountVaultByDatasetType(vaultPath string) error {
 const vaultMigrateMountpoint = "/run/vaultmgr/vault-migrate"
 
 // migrateVaultFsToZvol migrates a carried-over EVE-kvm filesystem vault to the
-// EVE-k zvol+ext4 layout, preserving the encrypted vault contents (containerd
-// content store and metadata, downloader, verifier, configs). It must be
-// called with the vault unlock key staged (i.e. from unlockVault) since it
-// creates new encrypted zvols, and with the source filesystem vault mounted at
-// /<vaultPath>.
+// EVE-k zvol+ext4 layout, preserving the vault contents (containerd content
+// store and metadata, downloader, verifier, configs). It must be called with
+// the source filesystem vault mounted at /<vaultPath>. When encrypt is true the
+// new zvols are created encrypted, which requires the vault unlock key already
+// staged (the TPM path via unlockVault); when false they are created
+// unencrypted (the no-TPM path via SetupDefaultVault).
 //
 // The sequence stages a new zvol "<vaultPath>2", copies the vault contents into
 // it, then destroys the old filesystem vault and renames the new one into
 // place. It is re-entrant: a leftover staging zvol from an interrupted attempt
 // is removed first, and once the rename has happened the vault is a zvol and
-// unlockVault takes the native path instead of calling this.
-func (h *ZFSHandler) migrateVaultFsToZvol(vaultPath string) error {
+// the caller takes the native path instead of calling this.
+func (h *ZFSHandler) migrateVaultFsToZvol(vaultPath, keyFile string, encrypt bool) error {
 	stagingDataset := vaultPath + "2"
 
 	// Re-entrancy: drop any staging zvol left behind by an interrupted attempt.
@@ -262,7 +281,7 @@ func (h *ZFSHandler) migrateVaultFsToZvol(vaultPath string) error {
 	// Empty etcd zvol: etcd/k3s start fresh on EVE-k, there is nothing to carry
 	// over. Skip if a prior attempt already created it.
 	if !zfs.DatasetExist(h.log, types.EtcdZvol) {
-		if err := CreateZvolEtcd(h.log, types.EtcdZvol, zfsKeyFile, true); err != nil {
+		if err := CreateZvolEtcd(h.log, types.EtcdZvol, keyFile, encrypt); err != nil {
 			return fmt.Errorf("error creating etcd zvol %s: %v", types.EtcdZvol, err)
 		}
 	}
@@ -280,7 +299,7 @@ func (h *ZFSHandler) migrateVaultFsToZvol(vaultPath string) error {
 			availBytes, vaultPath)
 	}
 	sizeBytes := availBytes - zfs.VolBlockSizeBytes
-	if err := zfs.CreateVaultVolumeDataset(h.log, stagingDataset, zfsKeyFile, true,
+	if err := zfs.CreateVaultVolumeDataset(h.log, stagingDataset, keyFile, encrypt,
 		sizeBytes, "zstd", zfs.VolBlockSizeBytes); err != nil {
 		return fmt.Errorf("error creating migration zvol %s: %v", stagingDataset, err)
 	}
