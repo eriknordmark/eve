@@ -777,6 +777,13 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 				gcUnusedInitObjects(&ctx)
 				ctx.initGced = true
 			}
+			// Re-drive volumes parked in a transient EVE-k cluster-storage
+			// error (longhorn/CDI not ready yet, common right after a kvm->k
+			// conversion) so they recover once the cluster is up.
+			retryFailedClusterVolumeCreate(&ctx)
+			// Re-drive volumes deferred pre-create (waiting on EVE-k cluster
+			// storage readiness) so they proceed once longhorn/CDI come up.
+			reevaluatePendingVolumes(&ctx)
 			ps.CheckMaxTimeTopic(agentName, "gc", start,
 				warningTime, errorTime)
 

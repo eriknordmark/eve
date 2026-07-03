@@ -18,6 +18,7 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/diskmetrics"
 	"github.com/lf-edge/eve/pkg/pillar/types"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -43,6 +44,15 @@ func CreatePVC(pvcName string, size uint64, log *base.LogObject, storageClass st
 	result, err := clientset.CoreV1().PersistentVolumeClaims(pvc.Namespace).
 		Create(context.Background(), pvc, metav1.CreateOptions{})
 	if err != nil {
+		if k8serrors.IsAlreadyExists(err) {
+			// Idempotent: a prior attempt (e.g. one that created the PVC but
+			// then failed at the CDI upload because the cluster was not ready)
+			// already left this PVC. Treat it as success so a retry proceeds to
+			// the image upload against the existing PVC (RolloutDiskToPVC then
+			// uses --no-create) instead of dying here with AlreadyExists.
+			log.Noticef("CreatePVC: PVC %s already exists, reusing it", pvcName)
+			return nil
+		}
 		err = fmt.Errorf("failed to CreatePVC %s: %v", pvcName, err)
 		log.Error(err)
 		return err
@@ -50,6 +60,61 @@ func CreatePVC(pvcName string, size uint64, log *base.LogObject, storageClass st
 
 	log.Noticef("Created PVC: %s\n", result.ObjectMeta.Name)
 	return nil
+}
+
+// cdiControlPlaneDeployments are the CDI Deployments (namespace "cdi") that must
+// each have an available replica before a CDI image upload can succeed.
+var cdiControlPlaneDeployments = []string{"cdi-apiserver", "cdi-deployment", "cdi-uploadproxy"}
+
+// ClusterStorageReadyForVolumes reports whether the EVE-k cluster storage stack is
+// ready to create app volumes: the `longhorn` StorageClass exists, the CDI upload
+// proxy Service has a ClusterIP, and the CDI control-plane Deployments
+// (cdi-apiserver, cdi-deployment, cdi-uploadproxy) each have at least one available
+// replica. Callers use this to DEFER volume creation quietly until longhorn/CDI are
+// up -- which can take tens of minutes whenever an app volume is requested while the
+// EVE-k cluster is still coming up: on a freshly installed node's first boot when the
+// controller's EdgeDevConfig already contains the app instance, or in the minutes
+// after a kvm->k conversion. Without the gate these attempts fail with "storageclass
+// not found" / "no upload pod annotation" / RolloutDiskToPVC "attempts to upload
+// image failed".
+//
+// The uploadproxy ClusterIP is assigned at Service creation, well before the CDI
+// pods are Ready and before CDI can create/annotate a per-PVC upload pod, so the
+// Service check alone is necessary but NOT sufficient; the Deployment-availability
+// check closes that gap so RolloutDiskToPVC's upload is not attempted prematurely.
+// Best-effort: any API error or missing/unavailable component => not ready (false).
+func ClusterStorageReadyForVolumes(log *base.LogObject) bool {
+	clientset, err := GetClientSet()
+	if err != nil {
+		log.Functionf("ClusterStorageReadyForVolumes: no clientset yet: %v", err)
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := clientset.StorageV1().StorageClasses().
+		Get(ctx, VolumeCSIClusterStorageClass, metav1.GetOptions{}); err != nil {
+		log.Functionf("ClusterStorageReadyForVolumes: StorageClass %s not ready: %v",
+			VolumeCSIClusterStorageClass, err)
+		return false
+	}
+	svc, err := clientset.CoreV1().Services("cdi").
+		Get(ctx, "cdi-uploadproxy", metav1.GetOptions{})
+	if err != nil || svc.Spec.ClusterIP == "" {
+		log.Functionf("ClusterStorageReadyForVolumes: cdi-uploadproxy Service not ready: %v", err)
+		return false
+	}
+	// A ClusterIP alone does not mean CDI can serve an upload: require the CDI
+	// control-plane Deployments to each have an available replica so the upload
+	// pod can be created and annotated before RolloutDiskToPVC attempts the upload.
+	for _, dep := range cdiControlPlaneDeployments {
+		d, err := clientset.AppsV1().Deployments("cdi").Get(ctx, dep, metav1.GetOptions{})
+		if err != nil || d.Status.AvailableReplicas < 1 {
+			log.Functionf("ClusterStorageReadyForVolumes: CDI deployment %s not available yet: %v",
+				dep, err)
+			return false
+		}
+	}
+	return true
 }
 
 // DeletePVC : deletes PVC of the given name.
