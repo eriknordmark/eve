@@ -4,6 +4,7 @@ package partitionresizer
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"sync/atomic"
@@ -44,6 +45,20 @@ func maybeWrapBackend(b backend.Storage) backend.Storage {
 	var sectors int64
 	if fi, serr := b.Stat(); serr == nil {
 		sectors = fi.Size() / 512
+	}
+	// A real block device (/dev/sda) reports Size()==0 via Stat(); without the
+	// real size, isGPTWrite/gptRegion cannot recognize the backup-GPT region (the
+	// last 33 sectors), so only primary-region writes would be instrumented. Fall
+	// back to the underlying fd's end offset. go-diskfs uses pread/pwrite
+	// (offset-independent), so seeking this fd does not perturb its writes; restore
+	// the offset anyway for hygiene.
+	if sectors == 0 {
+		if f, ferr := b.Sys(); ferr == nil && f != nil {
+			if sz, serr := f.Seek(0, io.SeekEnd); serr == nil && sz > 0 {
+				sectors = sz / 512
+			}
+			_, _ = f.Seek(0, io.SeekStart)
+		}
 	}
 	// RESIZER_GPT_DELAY_NTH (optional, 1-based): delay+starve only the Nth GPT
 	// write, so a test can steer the watchdog reset onto a specific block
