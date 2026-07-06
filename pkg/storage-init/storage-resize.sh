@@ -99,17 +99,35 @@ resize_reboot() {
 # maybe_offline_disk_resize, not by destroying the backup. baseosmgr reads the
 # marker, reports the decline, and clears it on an image change / target
 # withdrawal. A failed resize must degrade to a clean upgrade-decline, never a brick.
+# $3 (optional) is the underlying tool message (e.g. the resize2fs/e2fsck stderr
+# line) so the marker -- and thus baseosmgr's decline -- names the real reason
+# instead of a bare rc. It is sanitized for single-line JSON (strip newlines,
+# escape \ and ", cap length).
 resize_abort() {
     _ad=/tmp/config_abort
+    _detail=$(printf '%s' "${3:-}" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g' | cut -c1-200)
     if _mount_config_rw "$_ad"; then
-        printf '{"eve_release":"%s","step":"%s","rc":"%s","ts":"%s"}\n' \
-            "$(_running_eve_release)" "$1" "$2" "$(date -Ins -u)" > "$_ad/resize-failed.json" 2>/dev/null
+        printf '{"eve_release":"%s","step":"%s","rc":"%s","detail":"%s","ts":"%s"}\n' \
+            "$(_running_eve_release)" "$1" "$2" "$_detail" "$(date -Ins -u)" > "$_ad/resize-failed.json" 2>/dev/null
         sync
         umount "$_ad"
     else
         log "storage-resizer: could not mount CONFIG rw to record resize failure ($1 rc=$2)"
     fi
     resize_reboot
+}
+
+# run_resizer runs a storage-resizer subcommand, streaming its output LIVE to the
+# console (as before -- the chaos/watchdog markers must appear in real time) while
+# also capturing it so a failure's underlying message can be extracted. Sets the
+# globals _rc (subcommand exit code) and _detail (the resize2fs/e2fsck error line,
+# or the last non-empty output line). busybox ash has no PIPESTATUS, so the exit
+# code is passed out of the pipe via a file.
+run_resizer() {
+    ( "$@" 2>&1; echo $? >/tmp/resize.rc ) | tee /tmp/resize.out >/dev/console
+    _rc=$(cat /tmp/resize.rc 2>/dev/null); case "$_rc" in ''|*[!0-9]*) _rc=1 ;; esac
+    _detail=$(grep -aoE '(resize2fs|e2fsck): .*' /tmp/resize.out 2>/dev/null | tail -1)
+    [ -n "$_detail" ] || _detail=$(grep -av '^[[:space:]]*$' /tmp/resize.out 2>/dev/null | tail -1)
 }
 
 # maybe_offline_disk_resize runs the shrink+grow while /persist is unmounted, gated
@@ -190,28 +208,26 @@ maybe_offline_disk_resize() {
         log "storage-resizer: grow-only requested on $_bootdev (attempt $((_n + 1)))"
     else
         log "storage-resizer: shrink+grow requested on $_bootdev (attempt $((_n + 1)))"
-        storage-resizer shrink --disk "$_bootdev" --flag-file "$CONFIGDIR/repartition-inprogress" --fix-errors >/dev/console 2>&1
-        _rc=$?
+        run_resizer storage-resizer shrink --disk "$_bootdev" --flag-file "$CONFIGDIR/repartition-inprogress" --fix-errors
         if [ "$_rc" -eq "$RESIZE_REBOOT_TO_APPLY" ]; then
             log "storage-resizer: shrink committed the GPT; rebooting to apply"
             resize_reboot
         elif [ "$_rc" -ne 0 ]; then
-            log "storage-resizer: shrink failed (rc=$_rc) on $_bootdev; aborting resize"
-            resize_abort "shrink" "$_rc"
+            log "storage-resizer: shrink failed (rc=$_rc) on $_bootdev; aborting resize: $_detail"
+            resize_abort "shrink" "$_rc" "$_detail"
         fi
         # Timestamped boundary between shrink and grow: log() prefixes the time,
         # so this lets the analyzer split per-attempt shrink vs grow duration
         # (the resizer's own "shrink complete"/"grow ..." lines are unprefixed).
         log "storage-resizer: shrink step done (attempt $((_n + 1))); starting grow"
     fi
-    storage-resizer grow --disk "$_bootdev" --fix-errors >/dev/console 2>&1
-    _rc=$?
+    run_resizer storage-resizer grow --disk "$_bootdev" --fix-errors
     if [ "$_rc" -eq "$RESIZE_REBOOT_TO_APPLY" ]; then
         log "storage-resizer: grow committed the GPT; rebooting to apply"
         resize_reboot
     elif [ "$_rc" -ne 0 ]; then
-        log "storage-resizer: grow failed (rc=$_rc) on $_bootdev; aborting resize"
-        resize_abort "grow" "$_rc"
+        log "storage-resizer: grow failed (rc=$_rc) on $_bootdev; aborting resize: $_detail"
+        resize_abort "grow" "$_rc" "$_detail"
     fi
     partprobe "$_bootdev"
     [ -n "${_wd_pid:-}" ] && kill "$_wd_pid" 2>/dev/null   # resize done -- stop the watchdog feeder

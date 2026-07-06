@@ -43,18 +43,27 @@ type resizeFailedMarker struct {
 	RC               string `json:"rc"`
 	TS               string `json:"ts"`
 	PersistRecreated bool   `json:"persist_recreated"`
+	// Detail is the underlying tool message that caused the abort (e.g. the
+	// resize2fs/e2fsck stderr line), so the decline names the real reason instead
+	// of a bare rc. Optional; older markers without it decline as before.
+	Detail string `json:"detail"`
 }
 
 // declineReason builds the operator-facing BaseOsStatus.Error text, calling out
-// whether workloads were lost (persist recreated) vs preserved.
+// the underlying tool message (when captured) and whether workloads were lost
+// (persist recreated) vs preserved.
 func (m resizeFailedMarker) declineReason() string {
 	persist := "/persist preserved"
 	if m.PersistRecreated {
 		persist = "/persist was recreated (workloads lost; device identity restored from backup)"
 	}
-	return fmt.Sprintf("boot-disk conversion failed (%s, rc=%s) under EVE %s; %s; "+
-		"not retrying until the EVE version changes or the update is withdrawn",
-		m.Step, m.RC, m.EveRelease, persist)
+	reason := fmt.Sprintf("boot-disk conversion failed (%s, rc=%s) under EVE %s",
+		m.Step, m.RC, m.EveRelease)
+	if m.Detail != "" {
+		reason += ": " + m.Detail
+	}
+	return reason + "; " + persist +
+		"; not retrying until the EVE version changes or the update is withdrawn"
 }
 
 // readResizeFailedMarker reads resize-failed.json from the mounted CONFIG

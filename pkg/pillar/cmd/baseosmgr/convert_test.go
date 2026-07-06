@@ -67,6 +67,17 @@ func TestDeclineReason(t *testing.T) {
 			t.Errorf("recreated reason %q missing %q", recreated, want)
 		}
 	}
+
+	// the captured tool message, when present, must surface in the decline
+	detailed := resizeFailedMarker{EveRelease: "1.2.3", Step: "shrink", RC: "1",
+		Detail: "resize2fs: New size smaller than minimum (12408205)"}.declineReason()
+	if !strings.Contains(detailed, "New size smaller than minimum (12408205)") {
+		t.Errorf("detailed reason missing tool message: %q", detailed)
+	}
+	// an empty Detail must not leave a dangling ": " separator
+	if strings.Contains(preserved, "under EVE 1.2.3:") {
+		t.Errorf("empty-detail reason has a dangling colon: %q", preserved)
+	}
 }
 
 func TestReadResizeFailedMarker(t *testing.T) {
