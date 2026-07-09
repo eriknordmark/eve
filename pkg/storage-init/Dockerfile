@@ -9,7 +9,7 @@ RUN eve-alpine-deploy.sh
 # execs it for the offline shrink/grow and the post-mount restore/cleanup. The
 # filesystem/partition tools it shells out to (resize2fs, e2fsck, fsck.fat,
 # sgdisk, partx) are in the PKGS above.
-FROM lfedge/eve-storage-resizer:7676796214b5d9f2ed6321b644c06a8e9747e22b AS storage-resizer
+FROM lfedge/eve-storage-resizer:3eae973e5e7fafb83094673bde803bed16c5f187 AS storage-resizer
 
 FROM scratch
 COPY --from=build /out/ /
