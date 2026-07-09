@@ -5,9 +5,11 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"unicode/utf16"
 )
@@ -17,6 +19,32 @@ const testSector = 512
 type partSpec struct {
 	name string
 	size int64
+}
+
+// fixtureGUID maps a fixture partition label to the fixed EVE partition GUID
+// buildGPTImage stamps on it. "ESP-B" is a fixture-only label for the reserved
+// second ESP (matched by GUID, not label).
+var fixtureGUID = map[string]string{
+	labelESP:     espAUUID,
+	labelIMGA:    imgaUUID,
+	labelIMGB:    imgbUUID,
+	labelPersist: persistUUID,
+	"ESP-B":      espBUUID,
+}
+
+// encodeGUIDBytes is the inverse of decodeGUID: a canonical GUID string to the
+// 16-byte mixed-endian on-disk form. Empty string yields all zeros.
+func encodeGUIDBytes(guid string) []byte {
+	b := make([]byte, 16)
+	raw, err := hex.DecodeString(strings.ReplaceAll(guid, "-", ""))
+	if err != nil || len(raw) != 16 {
+		return b
+	}
+	b[0], b[1], b[2], b[3] = raw[3], raw[2], raw[1], raw[0]
+	b[4], b[5] = raw[5], raw[4]
+	b[6], b[7] = raw[7], raw[6]
+	copy(b[8:16], raw[8:16])
+	return b
 }
 
 // buildGPTImage writes a sparse disk image at path with a primary GPT (no CRCs —
@@ -54,6 +82,9 @@ func buildGPTImage(t *testing.T, path string, diskBytes int64, parts []partSpec)
 		e := entries[i*128 : (i+1)*128]
 		// minimal non-zero type GUID so the slot is "used"
 		e[0] = 0x01
+		// unique partition GUID derived from the fixture label (the "ESP-B"
+		// fixture label maps to the reserved second ESP's GUID)
+		copy(e[16:32], encodeGUIDBytes(fixtureGUID[p.name]))
 		binary.LittleEndian.PutUint64(e[32:40], first)
 		binary.LittleEndian.PutUint64(e[40:48], last)
 		u16 := utf16.Encode([]rune(p.name))
@@ -106,9 +137,14 @@ func TestLargePartitionsInPlace(t *testing.T) {
 		want  bool
 	}{
 		{
-			name:  "eve-k geometry",
-			parts: []partSpec{{labelESP, 2 * GiB}, {labelIMGA, 10 * GiB}, {labelIMGB, 10 * GiB}, {labelPersist, 1 * GiB}},
+			name:  "full eve-k geometry incl ESP-B",
+			parts: []partSpec{{labelESP, 2 * GiB}, {labelIMGA, 10 * GiB}, {labelIMGB, 10 * GiB}, {"ESP-B", 2 * GiB}, {labelPersist, 1 * GiB}},
 			want:  true,
+		},
+		{
+			name:  "large but ESP-B missing (e.g. EVE 17.0)",
+			parts: []partSpec{{labelESP, 2 * GiB}, {labelIMGA, 10 * GiB}, {labelIMGB, 10 * GiB}, {labelPersist, 1 * GiB}},
+			want:  false,
 		},
 		{
 			name:  "pre-conversion small partitions",
@@ -141,6 +177,48 @@ func TestLargePartitionsInPlace(t *testing.T) {
 	}
 }
 
+func TestNeededBytes(t *testing.T) {
+	cases := []struct {
+		name  string
+		parts []partSpec
+		want  int64
+	}{
+		{
+			name:  "pre-ESP-B kvm (all small, no ESP-B)",
+			parts: []partSpec{{labelESP, 10 << 20}, {labelIMGA, 300 << 20}, {labelIMGB, 300 << 20}, {labelPersist, 1 * GiB}},
+			want:  24 * GiB,
+		},
+		{
+			name:  "EVE 17.0 (large ESP/IMG, no ESP-B) -> just ESP-B",
+			parts: []partSpec{{labelESP, 2 * GiB}, {labelIMGA, 10 * GiB}, {labelIMGB, 10 * GiB}, {labelPersist, 1 * GiB}},
+			want:  2 * GiB,
+		},
+		{
+			name:  "fully provisioned (four large + ESP-B) -> nothing",
+			parts: []partSpec{{labelESP, 2 * GiB}, {labelIMGA, 10 * GiB}, {labelIMGB, 10 * GiB}, {"ESP-B", 2 * GiB}, {labelPersist, 1 * GiB}},
+			want:  0,
+		},
+		{
+			name:  "one img undersized only",
+			parts: []partSpec{{labelESP, 2 * GiB}, {labelIMGA, 10 * GiB}, {labelIMGB, 8 * GiB}, {"ESP-B", 2 * GiB}, {labelPersist, 1 * GiB}},
+			want:  10 * GiB,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "disk.img")
+			buildGPTImage(t, path, 60*GiB, c.parts)
+			parts, _, err := readGPT(path, testSector)
+			if err != nil {
+				t.Fatalf("readGPT: %v", err)
+			}
+			if got := neededBytes(parts); got != c.want {
+				t.Errorf("neededBytes = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
 func TestSpaceForLargePartitions(t *testing.T) {
 	// small front partitions (~620 MB) then a big free tail
 	front := []partSpec{{labelESP, 10 << 20}, {labelIMGA, 300 << 20}, {labelIMGB, 300 << 20}, {"CONFIG", 5 << 20}}
@@ -160,7 +238,7 @@ func TestSpaceForLargePartitions(t *testing.T) {
 			if err != nil {
 				t.Fatalf("readGPT: %v", err)
 			}
-			if got := SpaceForLargePartitions(parts, diskSize, testSector).OK; got != c.want {
+			if got := SpaceForLargePartitions(parts, diskSize, testSector, 22*GiB).OK; got != c.want {
 				t.Errorf("SpaceForLargePartitions = %v, want %v", got, c.want)
 			}
 		})

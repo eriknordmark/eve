@@ -69,8 +69,8 @@ func TestEvaluateMultiDiskAndZFS(t *testing.T) {
 			wantDec:     "insufficient",
 		},
 		{
-			name:        "already EVE-k geometry -> proceed",
-			parts:       []partSpec{{labelESP, 2 * GiB}, {labelIMGA, 10 * GiB}, {labelIMGB, 10 * GiB}, {labelPersist, 1 * GiB}},
+			name:        "already EVE-k geometry incl ESP-B -> proceed",
+			parts:       []partSpec{{labelESP, 2 * GiB}, {labelIMGA, 10 * GiB}, {labelIMGB, 10 * GiB}, {"ESP-B", 2 * GiB}, {labelPersist, 1 * GiB}},
 			diskSize:    40 * GiB,
 			persistDisk: "",
 			persistType: "ext4",

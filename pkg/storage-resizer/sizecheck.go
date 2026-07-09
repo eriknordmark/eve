@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"unicode/utf16"
 )
 
@@ -26,14 +27,12 @@ const (
 	// GiB is a binary gibibyte.
 	GiB = int64(1) << 30
 
-	// EVE-k target partition sizes (verified against pkg/mkimage-raw-efi/make-raw:
-	// part 1 "EFI System" 2 GB, IMGA/IMGB 10 GB, persist labelled "P3" at index 9).
-	espTargetBytes = 2 * GiB
-	imgTargetBytes = 10 * GiB
-
-	// spaceNeededBytes is the additional room the three new partitions need
-	// (2 + 10 + 10 GB).
-	spaceNeededBytes = espTargetBytes + 2*imgTargetBytes
+	// EVE-k target partition geometry (verified against pkg/mkimage-raw-efi/make-raw):
+	// ESP-A ("EFI System") #1 2 GB, IMGA #2 / IMGB #3 10 GB, the reserved second
+	// ESP ("EFI System") ESP-B #7 2 GB, persist ("P3") #9.
+	espTargetBytes  = 2 * GiB
+	imgTargetBytes  = 10 * GiB
+	espBTargetBytes = 2 * GiB
 
 	// MiB is a binary mebibyte.
 	MiB = int64(1) << 20
@@ -54,11 +53,23 @@ const (
 	shrinkMarginFixedBytes = 2177 * MiB // fixed reserve
 	shrinkMarginPerLakh    = 1639       // + 1.639% of partition size (1639 / 100000)
 
-	// Real EVE GPT partition labels.
+	// Real EVE GPT partition labels. ESP-A and ESP-B share "EFI System"; select
+	// them by GUID, not label.
 	labelESP     = "EFI System"
 	labelIMGA    = "IMGA"
 	labelIMGB    = "IMGB"
 	labelPersist = "P3"
+
+	// Fixed EVE partition GUIDs and the EFI System type GUID (make-raw's static
+	// UUIDs, upper-cased). Partitions are matched by these, so a shared label is
+	// unambiguous.
+	espAUUID    = "AD6871EE-31F9-4CF3-9E09-6F7A25C30051" // ESP-A (EFI_UUID)
+	imgaUUID    = "AD6871EE-31F9-4CF3-9E09-6F7A25C30052"
+	imgbUUID    = "AD6871EE-31F9-4CF3-9E09-6F7A25C30053"
+	espBUUID    = "AD6871EE-31F9-4CF3-9E09-6F7A25C30056" // ESP-B (EFI_B_UUID)
+	persistUUID = "AD6871EE-31F9-4CF3-9E09-6F7A25C30059" // P3
+	efiTypeGUID = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B" // ef00 EFI System type
+	espBIndex   = 7
 
 	// gptBackupSectors is the space the secondary GPT (header + entry array)
 	// reserves at the very end of the disk; it must not be counted as free.
@@ -69,6 +80,7 @@ const (
 type Partition struct {
 	Index     int    `json:"index"`
 	Name      string `json:"name"`
+	GUID      string `json:"guid"` // unique partition GUID, upper-case canonical
 	FirstLBA  uint64 `json:"firstLBA"`
 	LastLBA   uint64 `json:"lastLBA"`
 	SizeBytes int64  `json:"sizeBytes"`
@@ -124,6 +136,7 @@ func readGPT(path string, sectorSize int64) (parts []Partition, diskSize int64, 
 		parts = append(parts, Partition{
 			Index:     i + 1,
 			Name:      decodeUTF16Name(e[56:128]),
+			GUID:      decodeGUID(e[16:32]),
 			FirstLBA:  first,
 			LastLBA:   last,
 			SizeBytes: int64(last-first+1) * sectorSize,
@@ -145,6 +158,21 @@ func decodeUTF16Name(b []byte) string {
 	return string(utf16.Decode(u16))
 }
 
+// decodeGUID decodes a 16-byte GPT GUID (mixed-endian: the first three fields
+// are little-endian on disk, the last two big-endian) to its upper-case
+// canonical string form.
+func decodeGUID(b []byte) string {
+	if len(b) < 16 {
+		return ""
+	}
+	return fmt.Sprintf("%08X-%04X-%04X-%04X-%X",
+		binary.LittleEndian.Uint32(b[0:4]),
+		binary.LittleEndian.Uint16(b[4:6]),
+		binary.LittleEndian.Uint16(b[6:8]),
+		binary.BigEndian.Uint16(b[8:10]),
+		b[10:16])
+}
+
 // partByName returns the first partition with the given GPT name.
 func partByName(parts []Partition, name string) (Partition, bool) {
 	for _, p := range parts {
@@ -155,26 +183,69 @@ func partByName(parts []Partition, name string) (Partition, bool) {
 	return Partition{}, false
 }
 
-// LargeResult reports whether each large partition is already at its target size.
+// partByGUID returns the partition with the given unique GPT GUID
+// (case-insensitive). GUID selection is unambiguous even when two partitions
+// share a label (ESP-A and ESP-B both use "EFI System").
+func partByGUID(parts []Partition, guid string) (Partition, bool) {
+	for _, p := range parts {
+		if strings.EqualFold(p.GUID, guid) {
+			return p, true
+		}
+	}
+	return Partition{}, false
+}
+
+// LargeResult reports whether the full EVE-k geometry is already in place.
 type LargeResult struct {
 	InPlace bool  `json:"inPlace"`
 	ESP     int64 `json:"espBytes"`
 	IMGA    int64 `json:"imgaBytes"`
 	IMGB    int64 `json:"imgbBytes"`
+	ESPB    bool  `json:"espbPresent"`
 }
 
-// LargePartitionsInPlace reports whether ESP ("EFI System") is >= 2 GB and
-// IMGA/IMGB are each >= 10 GB — i.e. the disk already has the EVE-k geometry.
+// LargePartitionsInPlace reports whether the disk already has the full EVE-k
+// geometry: ESP-A >= 2 GB, IMGA/IMGB each >= 10 GB, and the reserved second ESP
+// (ESP-B) present. Partitions are located by GUID because ESP-A and ESP-B share
+// the "EFI System" label. When this is true there is nothing to grow or create.
 func LargePartitionsInPlace(parts []Partition) LargeResult {
-	esp, okE := partByName(parts, labelESP)
-	imga, okA := partByName(parts, labelIMGA)
-	imgb, okB := partByName(parts, labelIMGB)
-	r := LargeResult{ESP: esp.SizeBytes, IMGA: imga.SizeBytes, IMGB: imgb.SizeBytes}
-	r.InPlace = okE && okA && okB &&
+	esp, okE := partByGUID(parts, espAUUID)
+	imga, okA := partByGUID(parts, imgaUUID)
+	imgb, okB := partByGUID(parts, imgbUUID)
+	_, okESPB := partByGUID(parts, espBUUID)
+	r := LargeResult{ESP: esp.SizeBytes, IMGA: imga.SizeBytes, IMGB: imgb.SizeBytes, ESPB: okESPB}
+	r.InPlace = okE && okA && okB && okESPB &&
 		esp.SizeBytes >= espTargetBytes &&
 		imga.SizeBytes >= imgTargetBytes &&
 		imgb.SizeBytes >= imgTargetBytes
 	return r
+}
+
+// neededBytes is the free space the conversion requires: for each target
+// partition (ESP-A, IMGA, IMGB, ESP-B) that is absent or smaller than its
+// target, its FULL target size — a grow relocates to a new full-size copy and a
+// create allocates a new partition, so each needs its whole target size of free
+// space; a target already at or above size contributes nothing. This mirrors the
+// per-partition diff Apply performs, so the pre-flight and the reconcile agree
+// on what is a no-op. Examples: pre-ESP-B kvm disk => 24 GiB; EVE 17.0 (large
+// ESP/IMG, no ESP-B) => 2 GiB; fully provisioned (four large) => 0.
+func neededBytes(parts []Partition) int64 {
+	targets := []struct {
+		guid string
+		size int64
+	}{
+		{espAUUID, espTargetBytes},
+		{imgaUUID, imgTargetBytes},
+		{imgbUUID, imgTargetBytes},
+		{espBUUID, espBTargetBytes},
+	}
+	var need int64
+	for _, t := range targets {
+		if p, ok := partByGUID(parts, t.guid); !ok || p.SizeBytes < t.size {
+			need += t.size
+		}
+	}
+	return need
 }
 
 // SpaceResult reports the free tail on the boot disk.
@@ -184,10 +255,10 @@ type SpaceResult struct {
 	NeededBytes   int64 `json:"neededBytes"`
 }
 
-// SpaceForLargePartitions reports whether the boot disk has at least 22 GB of
-// unallocated space after the last partition (minus the backup-GPT reservation)
-// — enough to create ESP2/IMGA2/IMGB2 without shrinking anything.
-func SpaceForLargePartitions(parts []Partition, diskSize, sectorSize int64) SpaceResult {
+// SpaceForLargePartitions reports whether the boot disk has at least need bytes
+// of unallocated space after the last partition (minus the backup-GPT
+// reservation) — enough to grow/create the missing partitions without shrinking.
+func SpaceForLargePartitions(parts []Partition, diskSize, sectorSize, need int64) SpaceResult {
 	var maxEnd int64 // first byte past the last partition
 	for _, p := range parts {
 		end := int64(p.LastLBA+1) * sectorSize
@@ -199,7 +270,7 @@ func SpaceForLargePartitions(parts []Partition, diskSize, sectorSize int64) Spac
 	if free < 0 {
 		free = 0
 	}
-	return SpaceResult{OK: free >= spaceNeededBytes, FreeTailBytes: free, NeededBytes: spaceNeededBytes}
+	return SpaceResult{OK: free >= need, FreeTailBytes: free, NeededBytes: need}
 }
 
 // ShrinkResult reports whether the ext4 /persist can be shrunk to free the

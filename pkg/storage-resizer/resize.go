@@ -67,8 +67,8 @@ func cmdShrink(args []string) int {
 		return 2
 	}
 	fmt.Fprintf(os.Stderr, "shrink %s to %s\n", *persistLabel, target)
-	changes := []pr.PartitionChange{pr.NewPartitionChange(pr.IdentifierByLabel, *persistLabel, sz)}
-	if err := pr.Run(*disk, nil, changes, *fixErrors, *dryRun, false); err != nil {
+	shrink := &pr.ShrinkSpec{ID: pr.NewPartitionIdentifier(pr.IdentifierByLabel, *persistLabel), Size: sz}
+	if err := pr.Apply(*disk, nil, shrink, *fixErrors, *dryRun); err != nil {
 		if errors.Is(err, pr.ErrRebootToApply) {
 			fmt.Fprintln(os.Stderr, "shrink: GPT committed, reboot required to apply:", err)
 			return exitRebootToApply
@@ -80,14 +80,20 @@ func cmdShrink(args []string) int {
 	return 0
 }
 
-// cmdGrow grows ESP/IMGA/IMGB into freed space (baseosmgr/online or post-shrink).
+// cmdGrow brings the boot disk to the EVE-k geometry (baseosmgr/online or
+// post-shrink): grow ESP-A/IMGA/IMGB and create the reserved ESP-B if absent.
+// It is declarative and idempotent -- a target already at size, or an ESP-B that
+// already exists, is a no-op -- so it is safe to run on any geometry (a
+// pre-ESP-B kvm disk, an EVE 17.0 large disk lacking ESP-B, or a fully
+// provisioned disk). Partitions are matched by their fixed GUID, since ESP-A and
+// ESP-B share the "EFI System" label.
 func cmdGrow(args []string) int {
 	fs := flag.NewFlagSet("grow", flag.ExitOnError)
 	disk := fs.String("disk", "", "boot disk image or block device (required)")
-	espSize := fs.String("esp", "2G", "target ESP size")
+	espSize := fs.String("esp", "2G", "target ESP-A size")
 	imgaSize := fs.String("imga", "10G", "target IMGA size")
 	imgbSize := fs.String("imgb", "10G", "target IMGB size")
-	espLabel := fs.String("esp-label", labelESP, "ESP partition GPT label")
+	espBSize := fs.String("esp-b", "2G", "reserved ESP-B size (created if absent)")
 	fixErrors := fs.Bool("fix-errors", false, "let fsck repair source filesystems before copying")
 	dryRun := fs.Bool("dry-run", false, "plan only; do not modify the disk")
 	_ = fs.Parse(args)
@@ -96,13 +102,16 @@ func cmdGrow(args []string) int {
 		usage()
 		return 2
 	}
-	changes := []pr.PartitionChange{
-		pr.NewPartitionChange(pr.IdentifierByLabel, *espLabel, mustParseSize("esp", *espSize)),
-		pr.NewPartitionChange(pr.IdentifierByLabel, labelIMGA, mustParseSize("imga", *imgaSize)),
-		pr.NewPartitionChange(pr.IdentifierByLabel, labelIMGB, mustParseSize("imgb", *imgbSize)),
+	desired := []pr.PartitionSpec{
+		{GUID: espAUUID, Label: labelESP, Index: 1, MinSize: mustParseSize("esp", *espSize)},
+		{GUID: imgaUUID, Label: labelIMGA, Index: 2, MinSize: mustParseSize("imga", *imgaSize)},
+		{GUID: imgbUUID, Label: labelIMGB, Index: 3, MinSize: mustParseSize("imgb", *imgbSize)},
+		{GUID: espBUUID, Label: labelESP, TypeGUID: efiTypeGUID, Index: espBIndex,
+			MinSize: mustParseSize("esp-b", *espBSize), FS: pr.FSFAT32},
 	}
-	fmt.Fprintf(os.Stderr, "grow %s=%s IMGA=%s IMGB=%s\n", *espLabel, *espSize, *imgaSize, *imgbSize)
-	if err := pr.Run(*disk, nil, changes, *fixErrors, *dryRun, true); err != nil {
+	fmt.Fprintf(os.Stderr, "grow ESP-A=%s IMGA=%s IMGB=%s; create ESP-B=%s if absent\n",
+		*espSize, *imgaSize, *imgbSize, *espBSize)
+	if err := pr.Apply(*disk, desired, nil, *fixErrors, *dryRun); err != nil {
 		if errors.Is(err, pr.ErrRebootToApply) {
 			fmt.Fprintln(os.Stderr, "grow: GPT committed, reboot required to apply:", err)
 			return exitRebootToApply

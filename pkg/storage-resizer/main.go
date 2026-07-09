@@ -94,7 +94,7 @@ func cmdCheck(args []string) int {
 	persistDisk := fs.String("persist-disk", "", "disk holding /persist, if different from --disk (multi-disk installs)")
 	persistType := fs.String("persist-type", "auto", "ext4|zfs|auto (auto reads /run/eve.persist_type)")
 	persistLabel := fs.String("persist-label", labelPersist, "GPT label of the persist partition")
-	needStr := fs.String("need", "22G", "space the new partitions need")
+	needStr := fs.String("need", "auto", "space the new partitions need; \"auto\" computes it per-disk from which targets are absent/undersized")
 	maxFull := fs.Int("max-full", 90, "max %% the persist fs may be full after shrinking")
 	sector := fs.Int64("sector", 512, "logical sector size")
 	asJSON := fs.Bool("json", false, "emit JSON")
@@ -104,10 +104,14 @@ func cmdCheck(args []string) int {
 		usage()
 		return 2
 	}
-	need, err := parseSize(*needStr)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "bad --need:", err)
-		return 2
+	need := int64(-1) // sentinel: compute per-disk in evaluate
+	if *needStr != "auto" {
+		v, err := parseSize(*needStr)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "bad --need:", err)
+			return 2
+		}
+		need = v
 	}
 
 	rep, err := evaluate(checkParams{
@@ -140,8 +144,14 @@ func evaluate(p checkParams) (checkReport, error) {
 		Disk: p.disk, DiskSize: diskSize, Partitions: parts,
 		PersistDisk: p.persistDisk, PersistType: p.persistType,
 	}
+	// Compute the space needed per-disk (absent/undersized targets) unless the
+	// caller pinned it with --need.
+	need := p.need
+	if need < 0 {
+		need = neededBytes(parts)
+	}
 	rep.Large = LargePartitionsInPlace(parts)
-	rep.Space = SpaceForLargePartitions(parts, diskSize, p.sector)
+	rep.Space = SpaceForLargePartitions(parts, diskSize, p.sector, need)
 
 	// Shrinking /persist only frees space on the boot disk when /persist is an
 	// ext4 partition ON the boot disk. In multi-disk installs (persist on another
@@ -157,7 +167,7 @@ func evaluate(p checkParams) (checkReport, error) {
 	case !hasP3:
 		rep.ShrinkReason = "no " + p.persistLbl + " partition on the boot disk (persist likely ZFS/another disk)"
 	default:
-		sr, err := SpaceToShrinkExt(p.disk, int64(p3.FirstLBA)*p.sector, p.need, p.maxFull)
+		sr, err := SpaceToShrinkExt(p.disk, int64(p3.FirstLBA)*p.sector, need, p.maxFull)
 		if err != nil {
 			// e.g. ZFS we were not told about: not an ext4 superblock
 			rep.ShrinkReason = "persist not shrinkable: " + err.Error()
