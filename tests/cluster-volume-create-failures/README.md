@@ -3,7 +3,7 @@
 Isolated tests for the typed-verdict defer/retry machinery in PR #6121: the
 permanent-no-retry, transient-retry-converge, and reboot-reverify branches that a
 happy-path soak cannot reach (`01`–`03`, `stress.sh`), plus fault-characterization
-tests (`04`–`06`) that measure *where* the create worker actually parks vs is absorbed
+tests (`04`–`07`) that measure *where* the create worker actually parks vs is absorbed
 by virtctl's internal retry, to inform whether the gc-tick retry is needed. Validated
 on EVE-k (k3s v1.34.2+k3s1), 2026-07-13/14.
 
@@ -17,6 +17,7 @@ on EVE-k (k3s v1.34.2+k3s1), 2026-07-13/14.
 | `04-retry-necessity.sh` | Sweeps sustained upload-path downtime to find `D*`, the minimum outage that forces a worker return. Each trial classifies ABSORBED (virtctl's internal retry rode it out → the gc retry never fired) vs PARKED (worker returned → gc retry needed). Answers "is `retryFailedClusterVolumeCreate` needed, or do the gate + virtctl's internal retries suffice?" |
 | `05-upload-sustained-park.sh` | Holds a *sustained* upload outage (operator down first so the proxy can't self-heal) and logs `uploadproxy_ready` each sample to prove the fault stays applied. Records that the worker parks transient only after virtctl's internal budget exhausts (~310s for a small volume), then recovers via the gc retry once the fault clears. |
 | `06-attach-cordon-absorb.sh` | Cordons the node so the CDI upload pod can't schedule (attach cannot happen). Shows the stall is **absorbed** by virtctl's `--wait-secs` budget (importer pod Pending, no park within 420s) — i.e. attach/scheduling faults park *later* than upload-proxy faults, not faster. |
+| `07-attach-allowsched-ineffective.sh` | Sets Longhorn node/disk `allowScheduling=false` and confirms it is **not** an effective attach fault — the volume binds and converges anyway (see the caveat below). Reads the Longhorn `Schedulable` state via `-o json` + `jq` so the kubectl jsonpath filter isn't parsed by the remote shell under `eve ssh`. |
 | `stress.sh`       | Soak: N-volume batches cycling through baseline / transient-storm / permanent-storm phases, asserting each phase's invariant every cycle. |
 
 ## Prerequisites
@@ -82,6 +83,7 @@ export EDEN=eden                       # or your wrapper
 ./04-retry-necessity.sh                # duration sweep -> find D*
 ./05-upload-sustained-park.sh          # sustained upload outage -> park at ~D*, recover
 ./06-attach-cordon-absorb.sh           # attach/scheduling fault -> absorbed, no park
+./07-attach-allowsched-ineffective.sh  # allowScheduling=false -> ineffective, converges
 N=4 CYCLES=20 ./stress.sh              # soak
 ```
 
@@ -114,10 +116,11 @@ post-gate outage that later heals — a narrow tail also covered by a reboot.
 
 ### Caveat: `allowScheduling=false` is NOT a usable attach fault on single-node
 
-Setting `allowScheduling=false` on the Longhorn node+disk does **not** block a new PVC:
-it binds in ~9s and the volume converges. Single-node Longhorn schedules to the only
-node regardless, and the disk `Schedulable` *condition* tracks capacity, not the admin
-toggle. Use the cordon fault (`06`) for an attach/scheduling stall.
+`07-attach-allowsched-ineffective.sh` demonstrates this: setting `allowScheduling=false`
+on the Longhorn node+disk does **not** block a new PVC — it binds in ~9s and the volume
+converges. Single-node Longhorn schedules to the only node regardless, and the disk
+`Schedulable` *condition* tracks capacity, not the admin toggle. Use the cordon fault
+(`06`) for an attach/scheduling stall.
 
 ## Deterministic alternative
 
