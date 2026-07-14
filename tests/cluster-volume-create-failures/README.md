@@ -2,7 +2,10 @@
 
 Isolated tests for the typed-verdict defer/retry machinery in PR #6121: the
 permanent-no-retry, transient-retry-converge, and reboot-reverify branches that a
-happy-path soak cannot reach. Validated on EVE-k (k3s v1.34.2+k3s1) on 2026-07-13.
+happy-path soak cannot reach (`01`–`03`, `stress.sh`), plus fault-characterization
+tests (`04`–`06`) that measure *where* the create worker actually parks vs is absorbed
+by virtctl's internal retry, to inform whether the gc-tick retry is needed. Validated
+on EVE-k (k3s v1.34.2+k3s1), 2026-07-13/14.
 
 ## What it checks
 
@@ -11,6 +14,9 @@ happy-path soak cannot reach. Validated on EVE-k (k3s v1.34.2+k3s1) on 2026-07-1
 | `01-permanent.sh` | A permanent create failure (403 Forbidden via ResourceQuota) parks the volume with `ClusterStorageTransientErr=false` and is **never retried** (ErrorTime frozen). |
 | `02-transient.sh` | A transient failure past the gate (upload backend down) parks with `ClusterStorageTransientErr=true` and **converges** once the fault clears. Convergence-after-restore is the retry proof: an error-parked volume is only ever re-driven by `retryFailedClusterVolumeCreate`. |
 | `03-reboot.sh`    | A reboot with an incomplete upload **re-verifies and re-drives** (converges) rather than skipping an empty PVC. Best-effort black-box; use the injector for determinism. |
+| `04-retry-necessity.sh` | Sweeps sustained upload-path downtime to find `D*`, the minimum outage that forces a worker return. Each trial classifies ABSORBED (virtctl's internal retry rode it out → the gc retry never fired) vs PARKED (worker returned → gc retry needed). Answers "is `retryFailedClusterVolumeCreate` needed, or do the gate + virtctl's internal retries suffice?" |
+| `05-upload-sustained-park.sh` | Holds a *sustained* upload outage (operator down first so the proxy can't self-heal) and logs `uploadproxy_ready` each sample to prove the fault stays applied. Records that the worker parks transient only after virtctl's internal budget exhausts (~310s for a small volume), then recovers via the gc retry once the fault clears. |
+| `06-attach-cordon-absorb.sh` | Cordons the node so the CDI upload pod can't schedule (attach cannot happen). Shows the stall is **absorbed** by virtctl's `--wait-secs` budget (importer pod Pending, no park within 420s) — i.e. attach/scheduling faults park *later* than upload-proxy faults, not faster. |
 | `stress.sh`       | Soak: N-volume batches cycling through baseline / transient-storm / permanent-storm phases, asserting each phase's invariant every cycle. |
 
 ## Prerequisites
@@ -73,11 +79,45 @@ export EDEN=eden                       # or your wrapper
 ./01-permanent.sh                      # permanent-no-retry (highest value; soak can't hit it)
 ./02-transient.sh                      # transient retry + converge
 ./03-reboot.sh                         # reboot reverify (best-effort)
+./04-retry-necessity.sh                # duration sweep -> find D*
+./05-upload-sustained-park.sh          # sustained upload outage -> park at ~D*, recover
+./06-attach-cordon-absorb.sh           # attach/scheduling fault -> absorbed, no park
 N=4 CYCLES=20 ./stress.sh              # soak
 ```
 
 Common overrides: `APP`, `IMG`, `CONVERGE_TIMEOUT`, `NORETRY_WINDOW`, `N`, `CYCLES`,
-`PHASES` (force a deterministic soak phase set, e.g. `PHASES="phase_transient"`).
+`PHASES` (force a deterministic soak phase set, e.g. `PHASES="phase_transient"`);
+`HOLD`/`INT`/`DURATIONS` for `04`–`06`; `NODE=<k8s-node>` for `06` on a named device.
+
+## Findings (2026-07-14)
+
+Measured with `04`–`06` on single-node EVE-k. See the analysis write-up for detail.
+
+- **Gate covers the motivating cases.** First-boot / kvm→k (storage 10–30 min coming
+  up) are handled by the readiness gate deferring *before* the worker runs — not the
+  retry.
+- **The worker absorbs outages internally for ~5 min.** A sustained upload-path outage
+  sits quietly in `CREATING_VOLUME/PrepareDone` (no error) until virtctl's
+  `--retry 10 --wait-secs 600` + outer loop exhausts at **`D*`≈310s** (small volume),
+  only *then* parking transient. Realistic self-healing blips (cdi-operator reconciles
+  a killed proxy in ~10s) are fully absorbed and never park.
+- **Attach/scheduling faults park later, not sooner.** A cordoned node (upload pod
+  Pending) is absorbed by virtctl's `--wait-secs` for >420s without parking. So there
+  is no *fast*-park path via Longhorn attach; the only fast park is a `CreatePVC`
+  API-level typed error (see `01`).
+- **A reboot re-drives a parked/incomplete upload** (`CreateVolume`'s `IsPVCUploadComplete`
+  guard re-runs the upload against the existing PVC), so a reboot is a second recovery
+  path alongside the gc retry.
+
+Net: `retryFailedClusterVolumeCreate` only adds value for a sustained (>~5 min)
+post-gate outage that later heals — a narrow tail also covered by a reboot.
+
+### Caveat: `allowScheduling=false` is NOT a usable attach fault on single-node
+
+Setting `allowScheduling=false` on the Longhorn node+disk does **not** block a new PVC:
+it binds in ~9s and the volume converges. Single-node Longhorn schedules to the only
+node regardless, and the disk `Schedulable` *condition* tracks capacity, not the admin
+toggle. Use the cordon fault (`06`) for an attach/scheduling stall.
 
 ## Deterministic alternative
 

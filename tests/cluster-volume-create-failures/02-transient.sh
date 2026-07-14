@@ -39,6 +39,15 @@ orig=$(kctl "-n cdi get deploy cdi-uploadproxy -o jsonpath={.spec.replicas}" | t
 
 log "T: faulting upload past the gate — cdi-operator + cdi-uploadproxy -> 0"
 kctl "-n cdi scale deploy cdi-operator --replicas=0"
+# cdi-uploadproxy is owned by the CDI CR, which cdi-operator reconciles back to its
+# desired replicas within ~10s. Scaling both back-to-back races that reconcile and is
+# flaky (the still-terminating operator can re-scale the proxy up before the upload
+# starts). Wait until the operator pod is fully gone, THEN scale the proxy down.
+for _ in $(seq 1 40); do
+    n=$(kctl "-n cdi get pods -l name=cdi-operator --no-headers 2>/dev/null" | grep -vc '^$' || true)
+    [[ "$n" == "0" ]] && break
+    sleep 3
+done
 kctl "-n cdi scale deploy cdi-uploadproxy --replicas=0"
 wait_upload_down   # ensure the proxy is truly down before deploying (scale is async)
 
