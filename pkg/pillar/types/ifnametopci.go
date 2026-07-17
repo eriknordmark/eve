@@ -7,7 +7,6 @@
 package types
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -45,8 +44,11 @@ func ExtractUSBBusnumPort(path string) (uint16, string, error) {
 	return busnum, port, nil
 }
 
-// Returns the long PCI IDs and the USB address (if available)
-func ifNameToPciAndUsbAddr(log *base.LogObject, ifName string) (string, string, error) {
+// IfNameToPciAndUsbAddr returns the long-form PCI address and USB address (if
+// any) of the device backing ifName. An L3 port bridged by nim (renamed to
+// "k"+ifName) is resolved transparently. Not reliable for cellular modems
+// (returns the PCIe bridge, not the modem); use WwanNetworkStatus.PhysAddrs.PCI.
+func IfNameToPciAndUsbAddr(log *base.LogObject, ifName string) (string, string, error) {
 	// Match for PCI IDs
 	re := regexp.MustCompile("([0-9a-f]){4}:([0-9a-f]){2}:([0-9a-f]){2}.[ls0-9a-f]")
 	var usbAddr string
@@ -251,7 +253,7 @@ func IoBundleToPci(log *base.LogObject, ib *IoBundle) (string, error) { //nolint
 			if ib.Type == IoNetEthVF {
 				l, err = vfIfNameToPci(ib.Ifname)
 			} else {
-				l, ib.UsbAddr, err = ifNameToPciAndUsbAddr(log, ib.Ifname)
+				l, ib.UsbAddr, err = IfNameToPciAndUsbAddr(log, ib.Ifname)
 			}
 			rename := false
 			if err == nil {
@@ -263,35 +265,44 @@ func IoBundleToPci(log *base.LogObject, ib *IoBundle) (string, error) { //nolint
 			} else {
 				rename = true
 			}
+			var renameWarn []string
 			if rename {
 				found, ifname := PciLongToIfname(log, long)
 				if found && ib.Ifname != ifname {
 					log.Warnf("%s/%s moved to %s",
 						ib.Ifname, long, ifname)
+					// Renaming to match the model is an auto-adjustment; warn so
+					// the controller sees it.
+					renameWarn = []string{fmt.Sprintf(
+						"adapter %s (logicallabel %s): model interface name %q does "+
+							"not match kernel name %q for PCI %s; renamed to match the model",
+						ib.Phylabel, ib.Logicallabel, ib.Ifname, ifname, long)}
 					IfRename(log, ifname, ib.Ifname)
 				}
 			}
+			// Reconcile the rename warning (self-clears when no longer renaming).
+			ib.Error.SetSourceErrors(ErrIoBundleRename{}, true, false, renameWarn)
 		}
 	} else if ib.Ifname != "" {
 		var err error
 		if ib.Type == IoNetEthVF {
 			long, err = vfIfNameToPci(ib.Ifname)
 			if err != nil {
-				return long, err
+				return long, ErrIoBundleMissingDevice{msg: err.Error()}
 			}
 		} else {
-			long, ib.UsbAddr, err = ifNameToPciAndUsbAddr(log, ib.Ifname)
+			long, ib.UsbAddr, err = IfNameToPciAndUsbAddr(log, ib.Ifname)
 			if err != nil {
-				return long, err
+				return long, ErrIoBundleMissingDevice{msg: err.Error()}
 			}
 		}
 	} else {
 		return "", nil
 	}
 	if !pciLongExists(long) {
-		errStr := fmt.Sprintf("PCI device %s/%s long %s does not exist",
-			ib.Phylabel, ib.Logicallabel, long)
-		return long, errors.New(errStr)
+		return long, ErrIoBundleMissingDevice{msg: fmt.Sprintf(
+			"PCI device %s/%s long %s does not exist",
+			ib.Phylabel, ib.Logicallabel, long)}
 	}
 	return long, nil
 }
