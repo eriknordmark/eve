@@ -24,6 +24,7 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/base"
 	"github.com/lf-edge/eve/pkg/pillar/diskconvert"
 	"github.com/lf-edge/eve/pkg/pillar/types"
+	"github.com/lf-edge/eve/pkg/pillar/volmanifest"
 	"github.com/lf-edge/eve/pkg/pillar/zboot"
 )
 
@@ -288,6 +289,23 @@ func maybeConvert(ctx *baseOsMgrContext, status *types.BaseOsStatus) bool {
 
 	switch res.Outcome {
 	case diskconvert.OutcomeProceed:
+		// The offline resize has completed and the geometry is (now) EVE-k. If a
+		// pre-resize content manifest was recorded, the shrink may have silently
+		// corrupted volume data (invisible to fsck/qemu-img). Verify each volume on
+		// the worker (hashing tens of GiB would stall this handler past its watchdog
+		// window) and do NOT start the A/B install until the manifest is consumed;
+		// the worker re-triggers this evaluation when done, and removes any volume
+		// that is not provably intact so the EVE-k boot recreates it. No manifest
+		// means no destructive conversion recorded one, so nothing to verify.
+		if volmanifest.Exists(volumeManifestDirs()...) {
+			AddWorkVerifyVolumes(ctx, status.Key())
+			if !status.Converting || status.HasError() {
+				status.Converting = true
+				status.ClearError()
+				publishBaseOsStatus(ctx, status)
+			}
+			return false
+		}
 		// Geometry is (now) EVE-k. A cross-flavor conversion is still in
 		// progress: keep Converting set so the A/B install and the reboot into
 		// the target image are reported as CONVERTING (doBaseOsActivate advances
@@ -331,6 +349,12 @@ func maybeConvert(ctx *baseOsMgrContext, status *types.BaseOsStatus) bool {
 		publishBaseOsStatus(ctx, status)
 		return false
 	}
+}
+
+// volumeManifestDirs are the application-volume directories covered by the
+// pre-resize content manifest (encrypted vault volumes and clear volumes).
+func volumeManifestDirs() []string {
+	return []string{types.VolumeEncryptedDirName, types.VolumeClearDirName}
 }
 
 // withConfigPartitionRW mounts the CONFIG partition read-write at a temp dir

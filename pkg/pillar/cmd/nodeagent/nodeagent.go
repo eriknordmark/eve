@@ -100,6 +100,7 @@ type nodeagentContext struct {
 	deviceReboot                bool
 	deviceShutdown              bool
 	devicePoweroff              bool
+	convertResizeReboot         bool   // reboot is for the kvm<->k offline resize: hash volumes once apps are halted
 	allDomainsHalted            bool   // Progression of reboot, shutdown, etc
 	requestedRebootReason       string // Reason we will be rebooting
 	requestedBootReason         types.BootReason
