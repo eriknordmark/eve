@@ -11,6 +11,7 @@ import (
 
 	"github.com/lf-edge/eve/pkg/pillar/agentlog"
 	"github.com/lf-edge/eve/pkg/pillar/types"
+	"github.com/lf-edge/eve/pkg/pillar/volmanifest"
 )
 
 // node health timer functions
@@ -360,6 +361,18 @@ func handleNodeOperation(ctxPtr *nodeagentContext, op types.DeviceOperation) {
 	waitForAllDomainsHalted(ctxPtr)
 	ctxPtr.allDomainsHalted = true
 	publishNodeAgentStatus(ctxPtr)
+
+	if ctxPtr.convertResizeReboot {
+		// Domains are halted (volumes quiescent) and the vault is still mounted:
+		// record the content-hash manifest the post-resize boot verifies against,
+		// so an interrupted shrink that silently corrupts a volume's data is caught.
+		// Best-effort — a hashing failure must not block the reboot.
+		if err := volmanifest.Write(types.VolumeEncryptedDirName, types.VolumeClearDirName); err != nil {
+			log.Errorf("convert-resize: volume manifest write failed: %v", err)
+		} else {
+			log.Functionf("convert-resize: wrote volume content manifest before resize")
+		}
+	}
 
 	// do a sync
 	log.Functionf("Doing a sync..")
