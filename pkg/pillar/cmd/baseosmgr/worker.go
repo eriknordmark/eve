@@ -5,14 +5,20 @@ package baseosmgr
 
 import (
 	"fmt"
+	"os"
 	"time"
 
+	"github.com/lf-edge/eve/pkg/pillar/volmanifest"
 	"github.com/lf-edge/eve/pkg/pillar/worker"
 	"github.com/lf-edge/eve/pkg/pillar/zboot"
 )
 
 const (
-	workInstall = "install"
+	workInstall       = "install"
+	workVerifyVolumes = "verifyVolumes"
+	// verifyVolumesWorkKey is the single work key for the post-resize volume
+	// content verification — only one conversion runs at a time.
+	verifyVolumesWorkKey = "verify-volumes"
 )
 
 // installWorkDescription install work we feed into the worker go routine
@@ -73,5 +79,60 @@ func processInstallWorkResult(ctxPtr interface{}, res worker.WorkResult) error {
 	ctx := ctxPtr.(*baseOsMgrContext)
 	d := res.Description.(installWorkDescription)
 	baseOsHandleStatusUpdateUUID(ctx, d.key)
+	return nil
+}
+
+// verifyVolumesWorkDescription carries the BaseOsStatus key to re-evaluate once
+// the post-resize volume verification finishes.
+type verifyVolumesWorkDescription struct {
+	baseOsKey string
+}
+
+// AddWorkVerifyVolumes queues the post-resize volume content verification. It runs
+// on the worker, not in a pubsub handler, because hashing tens of GiB of volume
+// data would otherwise stall the agent past its watchdog window.
+func AddWorkVerifyVolumes(ctx *baseOsMgrContext, baseOsKey string) {
+	d := verifyVolumesWorkDescription{baseOsKey: baseOsKey}
+	done, err := ctx.worker.TrySubmit(worker.Work{Key: verifyVolumesWorkKey,
+		Kind: workVerifyVolumes, Description: d})
+	if err != nil {
+		log.Errorf("TrySubmit %s failed: %s", verifyVolumesWorkKey, err)
+	} else if !done {
+		log.Fatalf("Failed to submit verify-volumes work due to queue length")
+	}
+}
+
+// verifyVolumesWorker verifies each application volume against the pre-resize
+// content manifest, removes any that is not provably intact (so the EVE-k boot
+// recreates it blank / from its content tree), then consumes the manifest so the
+// conversion proceeds on the next evaluation.
+func verifyVolumesWorker(ctxPtr interface{}, w worker.Work) worker.WorkResult {
+	d := w.Description.(verifyVolumesWorkDescription)
+	result := worker.WorkResult{Key: w.Key, Description: d}
+
+	dirs := volumeManifestDirs()
+	corruptions, err := volmanifest.Verify(dirs...)
+	if err != nil {
+		result.Error = err
+		result.ErrorTime = time.Now()
+		return result
+	}
+	for _, c := range corruptions {
+		log.Warnf("post-resize: volume %s not intact (%s); removing so it is recreated",
+			c.Path, c.Reason)
+		if rmErr := os.Remove(c.Path); rmErr != nil && !os.IsNotExist(rmErr) {
+			log.Errorf("post-resize: remove corrupt volume %s: %v", c.Path, rmErr)
+		}
+	}
+	volmanifest.Remove(dirs...)
+	return result
+}
+
+// processVerifyVolumesWorkResult re-evaluates the BaseOsStatus once verification
+// is done; the manifest is now consumed, so maybeConvert proceeds with the install.
+func processVerifyVolumesWorkResult(ctxPtr interface{}, res worker.WorkResult) error {
+	ctx := ctxPtr.(*baseOsMgrContext)
+	d := res.Description.(verifyVolumesWorkDescription)
+	baseOsHandleStatusUpdateUUID(ctx, d.baseOsKey)
 	return nil
 }

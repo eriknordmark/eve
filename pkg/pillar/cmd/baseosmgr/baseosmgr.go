@@ -114,7 +114,8 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	updateAndPublishZbootStatusAll(&ctx)
 
 	ctx.worker = worker.NewPool(log, &ctx, 20, map[string]worker.Handler{
-		workInstall: {Request: installWorker, Response: processInstallWorkResult},
+		workInstall:       {Request: installWorker, Response: processInstallWorkResult},
+		workVerifyVolumes: {Request: verifyVolumesWorker, Response: processVerifyVolumesWorkResult},
 	})
 
 	// report other agents, about, zboot status availability

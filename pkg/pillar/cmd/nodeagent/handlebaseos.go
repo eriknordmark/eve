@@ -67,6 +67,10 @@ func handleBaseOsStatusImpl(ctxArg interface{}, key string,
 	}
 	infoStr := fmt.Sprintf("NORMAL: baseos-conversion(%s) reboot to repartition boot disk", key)
 	log.Function(infoStr)
+	// Record a content-hash manifest of the app volumes once the domains are
+	// halted (see handleNodeOperation): the offline shrink can silently corrupt a
+	// volume's data, which the post-resize boot detects by re-hashing.
+	ctxPtr.convertResizeReboot = true
 	scheduleNodeOperation(ctxPtr, infoStr, types.BootReasonUpdate,
 		types.DeviceOperationReboot)
 }
