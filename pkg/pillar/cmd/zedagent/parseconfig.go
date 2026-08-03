@@ -30,6 +30,7 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/types"
 	fileutils "github.com/lf-edge/eve/pkg/pillar/utils/file"
 	"github.com/lf-edge/eve/pkg/pillar/utils/netutils"
+	"github.com/lf-edge/eve/pkg/pillar/volmanifest"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -194,6 +195,19 @@ func parseConfig(getconfigCtx *getconfigContext, config *zconfig.EdgeDevConfig,
 				// before we can process the app instances
 				// which depend on the new baseOS
 				log.Noticef("parseConfig: Ignoring config as a new baseOS image is being activated")
+				return skipConfigUpdate
+			}
+
+			// A cross-flavor conversion halts the apps, records a content hash of every
+			// app volume, then repartitions across several reboots. Some of those reboots
+			// reach userspace on the pre-conversion flavor, and starting an app there
+			// mounts its volume read-write, which rewrites the ext4 superblock — the
+			// volume image changes although no file content does. The post-resize check
+			// then sees a hash mismatch and deletes the volume as corrupt. The manifest
+			// exists for exactly the window in which the volumes must stay quiescent, so
+			// gate on it: leave the apps stopped until the conversion has verified them.
+			if volmanifest.Exists(types.VolumeEncryptedDirName, types.VolumeClearDirName) {
+				log.Noticef("parseConfig: Ignoring app instance config: a boot-disk conversion is verifying app volumes")
 				return skipConfigUpdate
 			}
 
