@@ -19,6 +19,15 @@ const (
 	// verifyVolumesWorkKey is the single work key for the post-resize volume
 	// content verification — only one conversion runs at a time.
 	verifyVolumesWorkKey = "verify-volumes"
+	// quarantineMarkerPath, when present, makes the post-resize check rename a
+	// volume it found corrupt instead of deleting it. Absent in the field, where
+	// deleting is correct: the volume is unusable and EVE recreates it. A test
+	// measuring what the interrupted resize DID to the volume needs the bytes,
+	// and they are gone by the time any check outside pillar can look.
+	// The suffix keeps the rename inside the same fscrypt directory, so it stays a
+	// rename and never a multi-GiB copy.
+	quarantineMarkerPath = "/persist/volmanifest-keep-corrupt"
+	quarantineNameSuffix = ".corrupt"
 )
 
 // installWorkDescription install work we feed into the worker go routine
@@ -117,7 +126,19 @@ func verifyVolumesWorker(ctxPtr interface{}, w worker.Work) worker.WorkResult {
 		result.ErrorTime = time.Now()
 		return result
 	}
+	_, quarantine := os.Stat(quarantineMarkerPath)
 	for _, c := range corruptions {
+		if quarantine == nil {
+			dst := c.Path + quarantineNameSuffix
+			if mvErr := os.Rename(c.Path, dst); mvErr != nil {
+				log.Errorf("post-resize: quarantine %s failed: %v; removing instead",
+					c.Path, mvErr)
+			} else {
+				log.Warnf("post-resize: volume %s not intact (%s); quarantined as %s",
+					c.Path, c.Reason, dst)
+				continue
+			}
+		}
 		log.Warnf("post-resize: volume %s not intact (%s); removing so it is recreated",
 			c.Path, c.Reason)
 		if rmErr := os.Remove(c.Path); rmErr != nil && !os.IsNotExist(rmErr) {
