@@ -120,12 +120,18 @@ func verifyVolumesWorker(ctxPtr interface{}, w worker.Work) worker.WorkResult {
 	result := worker.WorkResult{Key: w.Key, Description: d}
 
 	dirs := volumeManifestDirs()
-	corruptions, err := volmanifest.Verify(dirs...)
+	checked, corruptions, err := volmanifest.Verify(dirs...)
 	if err != nil {
 		result.Error = err
 		result.ErrorTime = time.Now()
 		return result
 	}
+	// Report the coverage even when nothing is wrong. Without it the only evidence
+	// this check produces is a warning per corrupt volume, so a conversion that
+	// hashed nothing at all is indistinguishable from one where every volume was
+	// intact — and "no corruption found" then cannot be told from "not measured".
+	log.Noticef("post-resize: verified %d volume objects against the pre-resize manifest in %v; %d not intact",
+		checked, dirs, len(corruptions))
 	_, quarantine := os.Stat(quarantineMarkerPath)
 	for _, c := range corruptions {
 		if quarantine == nil {
