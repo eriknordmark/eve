@@ -152,7 +152,8 @@ func readManifest(dir string) (map[string]string, bool) {
 }
 
 // Verify re-hashes each dir's present volume objects and compares them to the
-// dir's manifest. It returns every object that is not provably intact:
+// dir's manifest. It returns how many objects it examined, plus every object that
+// is not provably intact:
 //   - manifest missing/unparseable → every present object (reason "no-manifest");
 //   - object present but absent from the manifest → "not-in-manifest";
 //   - object present with a different hash → "hash-mismatch".
@@ -160,19 +161,25 @@ func readManifest(dir string) (map[string]string, bool) {
 // Objects listed in the manifest but now absent are NOT reported: an absent volume
 // already self-heals via EVE's recreate-on-missing path. A non-existent dir is
 // skipped.
-func Verify(dirs ...string) ([]Corruption, error) {
+//
+// The examined count is reported so the caller can record what the check covered:
+// an empty corruption list on its own cannot distinguish "hashed every volume and
+// all were intact" from "found no volumes to hash".
+func Verify(dirs ...string) (int, []Corruption, error) {
 	var out []Corruption
+	checked := 0
 	for _, dir := range dirs {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			continue
 		}
 		names, err := volumeObjects(dir)
 		if err != nil {
-			return nil, fmt.Errorf("list %s: %w", dir, err)
+			return checked, nil, fmt.Errorf("list %s: %w", dir, err)
 		}
 		manifest, ok := readManifest(dir)
 		for _, name := range names {
 			path := filepath.Join(dir, name)
+			checked++
 			if !ok {
 				out = append(out, Corruption{Path: path, Reason: "no-manifest"})
 				continue
@@ -184,12 +191,12 @@ func Verify(dirs ...string) ([]Corruption, error) {
 			}
 			got, err := hashFile(path)
 			if err != nil {
-				return nil, fmt.Errorf("hash %s: %w", path, err)
+				return checked, nil, fmt.Errorf("hash %s: %w", path, err)
 			}
 			if got != want {
 				out = append(out, Corruption{Path: path, Reason: "hash-mismatch"})
 			}
 		}
 	}
-	return out, nil
+	return checked, out, nil
 }
