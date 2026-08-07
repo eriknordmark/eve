@@ -44,14 +44,20 @@ const (
 )
 
 // kubeItemList is the minimal shape needed from any `kubectl get <resource>
-// -o json`: a name per item, and the labels when the caller cares about them
-// (PVCs carry none worth reading; a VMIRS is attributed by label).
+// -o json`: a name per item, the item's own labels, and the selector labels.
+// A VMIRS is attributed by its selector, which is the only place EVE puts the
+// App-Domain-Name label. A PVC has neither field.
 type kubeItemList struct {
 	Items []struct {
 		Metadata struct {
 			Name   string            `json:"name"`
 			Labels map[string]string `json:"labels"`
 		} `json:"metadata"`
+		Spec struct {
+			Selector struct {
+				MatchLabels map[string]string `json:"matchLabels"`
+			} `json:"selector"`
+		} `json:"spec"`
 	} `json:"items"`
 }
 

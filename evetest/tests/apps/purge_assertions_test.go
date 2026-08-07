@@ -100,7 +100,9 @@ func assertExactlyOneVMIRSAtGeneration(
 	// equivalent.
 	wantName := base.GetAppKubeName(appDisplayName, appUUID) + "-" +
 		strconv.FormatUint(uint64(newCounter), 10)
-	names := listAppVMIRS(dev, appUUID)
+	names, found := listAppVMIRS(dev, appUUID)
+	g.Expect(found).To(BeTrue(),
+		"could not list VMIRS objects; k3s may still be starting")
 	g.Expect(names).To(HaveLen(1),
 		"expected exactly one VMIRS for the app, found %v", names)
 	if len(names) == 1 {

@@ -28,9 +28,13 @@ import (
 )
 
 const (
-	// appDomainNameLabel is the selector label every VMIRS carries with the
-	// owning app's DomainName ("<uuid>.<version>.<appnum>"). See the eveLabelKey
-	// constant in hypervisor/kubevirt.go.
+	// appDomainNameLabel holds the owning app's DomainName,
+	// "<uuid>.<version>.<appnum>". See the eveLabelKey constant in
+	// hypervisor/kubevirt.go.
+	//
+	// EVE puts this label in the VMIRS spec.selector.matchLabels and in the VMI
+	// template, but not in the VMIRS metadata.labels. Read the selector. Pillar
+	// attributes a VMIRS the same way, in sweepStaleGenerations.
 	appDomainNameLabel = "App-Domain-Name"
 
 	// kvmDomainStateDir mirrors hypervisor/kvm.go's kvmStateDir: qemu gets one
@@ -40,24 +44,28 @@ const (
 	kvmDomainStateDir = "/run/hypervisor/kvm"
 )
 
-// listAppVMIRS returns the names of every VMIRS (any generation) belonging to
-// appUUID, filtered on the App-Domain-Name label prefix "<uuid>." - the label
-// value is "<uuid>.<version>.<appnum>" and the version/appnum suffix does not
-// matter here. Names are sorted, so a caller can compare the whole set.
-func listAppVMIRS(dev *evetest.EdgeDevice, appUUID uuid.UUID) []string {
+// listAppVMIRS returns the names of every VMIRS (any generation) that belongs to
+// appUUID. It matches the prefix "<uuid>." on the App-Domain-Name selector
+// label, because the label value also carries a version and an appnum that do
+// not matter here. Names are sorted, so a caller can compare the whole set.
+//
+// found is false if the list could not be read. An empty list then means "no
+// VMIRS", and not "the device did not answer".
+func listAppVMIRS(
+	dev *evetest.EdgeDevice, appUUID uuid.UUID) (names []string, found bool) {
 	list, ok := kubectlListItems(dev, "vmirs")
 	if !ok {
-		return nil
+		return nil, false
 	}
 	prefix := appUUID.String() + "."
-	var names []string
 	for _, item := range list.Items {
-		if strings.HasPrefix(item.Metadata.Labels[appDomainNameLabel], prefix) {
+		if strings.HasPrefix(
+			item.Spec.Selector.MatchLabels[appDomainNameLabel], prefix) {
 			names = append(names, item.Metadata.Name)
 		}
 	}
 	sort.Strings(names)
-	return names
+	return names, true
 }
 
 // listKVMDomainDirs returns the qemu per-domain state directories belonging to
