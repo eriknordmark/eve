@@ -20,10 +20,19 @@ import (
 // restoring the original constructor when the test ends. Tests using this
 // must not run with t.Parallel, since the override is a shared
 // package-level var.
+//
+// The override rejects a nil *rest.Config, because the real constructor
+// panics on one. A stub that ignores its argument hides a caller that never
+// filled in kubeConfig.
 func swapKubevirtClient(t *testing.T, client kubecli.KubevirtClient) {
 	t.Helper()
 	orig := newKubevirtClient
-	newKubevirtClient = func(*rest.Config) (kubecli.KubevirtClient, error) {
+	newKubevirtClient = func(cfg *rest.Config) (kubecli.KubevirtClient, error) {
+		if cfg == nil {
+			t.Errorf("newKubevirtClient called with a nil *rest.Config: " +
+				"the caller did not populate kubeConfig (getConfig on a value " +
+				"receiver fills in a copy); this panics in production")
+		}
 		return client, nil
 	}
 	t.Cleanup(func() { newKubevirtClient = orig })

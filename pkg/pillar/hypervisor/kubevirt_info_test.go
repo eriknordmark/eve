@@ -15,7 +15,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/rest"
 	v1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
 )
@@ -29,6 +28,7 @@ func newInfoTestTask(t *testing.T, lastKnownID int) (kubevirtTask, *types.Domain
 	status := &types.DomainStatus{
 		UUIDandVersion: types.UUIDandVersion{UUID: appUUID},
 		DisplayName:    "myapp",
+		DomainName:     "myapp." + appUUID.String(),
 		PurgeCounter:   1,
 		DomainId:       lastKnownID,
 	}
@@ -36,25 +36,23 @@ func newInfoTestTask(t *testing.T, lastKnownID int) (kubevirtTask, *types.Domain
 
 	var ctx kubevirtContext
 	ctx.nodeNameMap = map[string]string{"nodename": "node1"}
-	ctx.kubeConfig = &rest.Config{} // non-nil so getConfig skips the real kubeconfig read
+
+	// Leave ctx.kubeConfig nil, as domainmgr does, and stub only the
+	// kubeconfig read. Info must then call getConfig itself. An earlier
+	// version of this helper set kubeConfig here and hid a nil-pointer
+	// panic in Info.
+	swapGetKubeConfig(t)
 
 	return ctx.Task(status).(kubevirtTask), status
 }
 
-// TestInfoContract pins the single most important invariant in Info's
-// contract (see its doc comment in kubevirt.go): a zero DomainId must
-// appear in exactly one case - the VMIRS confirmed absent (Get -> NotFound).
-// Every other outcome
-// of the existence check, including any error that leaves existence
-// genuinely unknown, must return a non-zero id and must never be reported
-// as "gone".
+// TestInfoContract pins the main invariant in Info's contract (see its doc
+// comment in kubevirt.go): a zero DomainId means the VMIRS is confirmed
+// absent, and nothing else. Every other outcome must return a non-zero id.
 //
-// This covers the two rows reachable from the existence check alone
-// (NotFound, and unreachable/other-error); the "found" rows (running here,
-// not-yet-attributable, unmapped phase) additionally exercise
-// replicaVmiScheduledOnMe's own VMI/pod listing and are covered by the
-// evetest cluster-level purge tests rather than duplicated here with a
-// second, deeper layer of client mocking.
+// It covers the two rows the existence check decides alone (NotFound, and
+// unreachable) plus the stranded-VMIRS row. The remaining "found" rows need
+// VMI and pod listing as well, so the evetest purge tests cover those.
 func TestInfoContract(t *testing.T) {
 	const lastKnownID = 918273645
 
@@ -94,49 +92,37 @@ func TestInfoContract(t *testing.T) {
 		assert.Equal(t, lastKnownID, id, "must preserve the caller's last known id, not fabricate a new one")
 		assert.NotZero(t, id)
 	})
-}
 
-// TestInfoVmirsDeletedMidCall covers a VMIRS that is present for Info's
-// existence check and deleted before the Get that follows it. Absence
-// observed at the second Get must produce the same answer as absence
-// observed at the first - HALTED, zero id, no error - rather than the
-// SCHEDULING-with-an-error that a NotFound would otherwise fall through to.
-// That error matters beyond the state it carries: waitForDomainGone treats
-// any error from Info as "the domain is gone" and stops waiting.
-func TestInfoVmirsDeletedMidCall(t *testing.T) {
-	const lastKnownID = 918273645
-	task, status := newInfoTestTask(t, lastKnownID)
-	status.DomainName = "11111111-1111-1111-1111-111111111111.1.1"
-	task.vmiList = map[string]*vmiMetaData{
-		status.DomainName: {mtype: IsMetaReplicaVMI, name: task.kubeName()},
-	}
+	// The two rows above return before Info builds a client. This row is the
+	// shortest path to that line, which panicked on a device. HALTED with a
+	// non-zero id tells domainmgr to recreate the workload.
+	t.Run("a stranded VMIRS is HALTED with a non-zero id", func(t *testing.T) {
+		task, _ := newInfoTestTask(t, lastKnownID)
+		domainName := task.status.DomainName
+		task.vmiList = map[string]*vmiMetaData{
+			domainName: {mtype: IsMetaReplicaVMI, name: task.kubeName()},
+		}
 
-	ctrl := gomock.NewController(t)
-	mockClient := kubecli.NewMockKubevirtClient(ctrl)
-	mockRS := kubecli.NewMockReplicaSetInterface(ctrl)
-	mockClient.EXPECT().ReplicaSet(gomock.Any()).Return(mockRS).AnyTimes()
+		noReplicas := int32(0)
+		stranded := &v1.VirtualMachineInstanceReplicaSet{
+			ObjectMeta: metav1.ObjectMeta{Name: task.kubeName(), UID: "stranded-uid"},
+			Spec:       v1.VirtualMachineInstanceReplicaSetSpec{Replicas: &noReplicas},
+		}
 
-	notFound := apierrors.NewNotFound(
-		schema.GroupResource{Group: "kubevirt.io", Resource: "virtualmachineinstancereplicasets"},
-		task.kubeName())
-	gomock.InOrder(
-		// The existence check finds it...
-		mockRS.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).Return(
-			&v1.VirtualMachineInstanceReplicaSet{
-				ObjectMeta: metav1.ObjectMeta{Name: task.kubeName(), UID: "some-uid"},
-			}, nil),
-		// ...and it is gone from here on. Left unbounded rather than pinned
-		// to a single call so this asserts the answer Info returns, not how
-		// many times it asks.
+		ctrl := gomock.NewController(t)
+		mockClient := kubecli.NewMockKubevirtClient(ctrl)
+		mockRS := kubecli.NewMockReplicaSetInterface(ctrl)
+		mockClient.EXPECT().ReplicaSet(gomock.Any()).Return(mockRS).AnyTimes()
+		// Two Gets: the existence check in replicaSetUID, then getVmirs.
 		mockRS.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).
-			Return(nil, notFound).AnyTimes(),
-	)
-	swapKubevirtClient(t, mockClient)
+			Return(stranded, nil).AnyTimes()
+		swapKubevirtClient(t, mockClient)
 
-	id, state, err := task.Info(status.DomainName)
-	assert.NoError(t, err, "a confirmed-absent domain is not an error")
-	assert.Equal(t, types.HALTED, state)
-	assert.Zero(t, id)
+		id, state, err := task.Info(domainName)
+		assert.Error(t, err, "a stranded VMIRS is logged as an error")
+		assert.Equal(t, types.HALTED, state)
+		assert.NotZero(t, id, "the object exists, so zero would falsely mean confirmed-absent")
+	})
 }
 
 // TestInfoUnreachableKeepsLastID is a focused restatement of the second
@@ -176,4 +162,40 @@ func TestCreateReturnsNonZero(t *testing.T) {
 	id, err := ctx.Create("some-domain-name", "", config)
 	assert.NoError(t, err)
 	assert.NotZero(t, id)
+}
+
+func TestInfoVmirsDeletedMidCall(t *testing.T) {
+	const lastKnownID = 918273645
+	task, status := newInfoTestTask(t, lastKnownID)
+	status.DomainName = "11111111-1111-1111-1111-111111111111.1.1"
+	task.vmiList = map[string]*vmiMetaData{
+		status.DomainName: {mtype: IsMetaReplicaVMI, name: task.kubeName()},
+	}
+
+	ctrl := gomock.NewController(t)
+	mockClient := kubecli.NewMockKubevirtClient(ctrl)
+	mockRS := kubecli.NewMockReplicaSetInterface(ctrl)
+	mockClient.EXPECT().ReplicaSet(gomock.Any()).Return(mockRS).AnyTimes()
+
+	notFound := apierrors.NewNotFound(
+		schema.GroupResource{Group: "kubevirt.io", Resource: "virtualmachineinstancereplicasets"},
+		task.kubeName())
+	gomock.InOrder(
+		// The existence check finds it...
+		mockRS.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).Return(
+			&v1.VirtualMachineInstanceReplicaSet{
+				ObjectMeta: metav1.ObjectMeta{Name: task.kubeName(), UID: "some-uid"},
+			}, nil),
+		// ...and it is gone from here on. Left unbounded rather than pinned
+		// to a single call so this asserts the answer Info returns, not how
+		// many times it asks.
+		mockRS.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil, notFound).AnyTimes(),
+	)
+	swapKubevirtClient(t, mockClient)
+
+	id, state, err := task.Info(status.DomainName)
+	assert.NoError(t, err, "a confirmed-absent domain is not an error")
+	assert.Equal(t, types.HALTED, state)
+	assert.Zero(t, id)
 }

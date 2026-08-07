@@ -854,8 +854,10 @@ func confirmVMIRSGone(kubeconfig *rest.Config, name, domainNameLabel string) err
 	}
 
 	for retry := 0; ; retry++ {
+		getCtx, getCancel := apiCtx()
 		_, getErr := virtClient.ReplicaSet(kubeapi.EVEKubeNameSpace).
-			Get(context.Background(), name, metav1.GetOptions{})
+			Get(getCtx, name, metav1.GetOptions{})
+		getCancel()
 		objGone := errors.IsNotFound(getErr)
 		if getErr != nil && !objGone {
 			return fmt.Errorf("confirmVMIRSGone(%s): %w", name, getErr)
@@ -863,10 +865,12 @@ func confirmVMIRSGone(kubeconfig *rest.Config, name, domainNameLabel string) err
 
 		podsGone := true
 		if domainNameLabel != "" {
+			listCtx, listCancel := apiCtx()
 			pods, listErr := podclientset.CoreV1().Pods(kubeapi.EVEKubeNameSpace).
-				List(context.Background(), metav1.ListOptions{
+				List(listCtx, metav1.ListOptions{
 					LabelSelector: "kubevirt.io=virt-launcher," + eveLabelKey + "=" + domainNameLabel,
 				})
+			listCancel()
 			if listErr != nil {
 				return fmt.Errorf("confirmVMIRSGone(%s): %w", name, listErr)
 			}
@@ -898,17 +902,21 @@ func confirmPodReplicaSetGone(kubeconfig *rest.Config, name string) error {
 	}
 
 	for retry := 0; ; retry++ {
+		getCtx, getCancel := apiCtx()
 		_, getErr := clientset.AppsV1().ReplicaSets(kubeapi.EVEKubeNameSpace).
-			Get(context.Background(), name, metav1.GetOptions{})
+			Get(getCtx, name, metav1.GetOptions{})
+		getCancel()
 		objGone := errors.IsNotFound(getErr)
 		if getErr != nil && !objGone {
 			return fmt.Errorf("confirmPodReplicaSetGone(%s): %w", name, getErr)
 		}
 
+		listCtx, listCancel := apiCtx()
 		pods, listErr := clientset.CoreV1().Pods(kubeapi.EVEKubeNameSpace).
-			List(context.Background(), metav1.ListOptions{
+			List(listCtx, metav1.ListOptions{
 				LabelSelector: fmt.Sprintf("app=%s", name),
 			})
+		listCancel()
 		if listErr != nil {
 			return fmt.Errorf("confirmPodReplicaSetGone(%s): %w", name, listErr)
 		}
@@ -939,6 +947,11 @@ func confirmPodReplicaSetGone(kubeconfig *rest.Config, name string) error {
 // generation while an old one may still exist.
 func (ctx kubevirtContext) sweepStaleGenerations(
 	appUUID uuid.UUID, desiredName string, desiredCounter uint32, mtype MetaDataType) error {
+	// Do not depend on the caller for kubeConfig. The receiver is a value,
+	// so a getConfig call up the stack can fill in a different copy.
+	if err := getConfig(&ctx); err != nil {
+		return err
+	}
 	kubeconfig := ctx.kubeConfig
 
 	if mtype == IsMetaReplicaPod {
@@ -946,8 +959,10 @@ func (ctx kubevirtContext) sweepStaleGenerations(
 		if err != nil {
 			return err
 		}
+		listCtx, listCancel := apiCtx()
 		list, err := clientset.AppsV1().ReplicaSets(kubeapi.EVEKubeNameSpace).
-			List(context.Background(), metav1.ListOptions{})
+			List(listCtx, metav1.ListOptions{})
+		listCancel()
 		if err != nil {
 			return err
 		}
@@ -968,7 +983,9 @@ func (ctx kubevirtContext) sweepStaleGenerations(
 	if err != nil {
 		return err
 	}
-	list, err := virtClient.ReplicaSet(kubeapi.EVEKubeNameSpace).List(context.Background(), metav1.ListOptions{})
+	listCtx, listCancel := apiCtx()
+	list, err := virtClient.ReplicaSet(kubeapi.EVEKubeNameSpace).List(listCtx, metav1.ListOptions{})
+	listCancel()
 	if err != nil {
 		return err
 	}
@@ -1043,7 +1060,9 @@ func (ctx kubevirtContext) Start(domainName string) error {
 	const maxRetries = 5
 	var created *v1.VirtualMachineInstanceReplicaSet
 	for retries := maxRetries; ; retries-- {
-		created, err = virtClient.ReplicaSet(kubeapi.EVEKubeNameSpace).Create(context.Background(), repvmi, metav1.CreateOptions{})
+		createCtx, createCancel := apiCtx()
+		created, err = virtClient.ReplicaSet(kubeapi.EVEKubeNameSpace).Create(createCtx, repvmi, metav1.CreateOptions{})
+		createCancel()
 		if err == nil {
 			break
 		}
@@ -1497,6 +1516,22 @@ func ensureVmirsReplicas(virtClient kubecli.KubevirtClient, vmiRsName string) er
 		ensureVmirsReplicaRetries, vmiRsName)
 }
 
+// apiCtx bounds a single Kubernetes API request with kubeapi.KubeAPITimeout,
+// the budget the rest of pillar already uses - see getVmirs just below, and the
+// kubeapi and cmd/zedkube packages. It exists as a helper because several of
+// these calls sit inside retry loops, where a deferred cancel would hold every
+// context until the loop finished.
+//
+// This matters more here than elsewhere: domainmgr's runHandler calls Info on a
+// 9-30s ticker and Start synchronously, and zedbox's watchdog reboots the device
+// if that handler stops checking in. A request that blocks forever on an
+// unhealthy API server therefore takes the node down. With a deadline it fails
+// instead, which Info reports as UNKNOWN with the caller's id preserved -
+// exactly the contract documented on types.DomainStatus.DomainId.
+func apiCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), kubeapi.KubeAPITimeout())
+}
+
 // replicaSetUID confirms existence of the app's VMIRS (or, for a NOHYPER
 // app, its plain ReplicaSet) directly via Get, rather than inferring
 // existence from replica placement, and returns its metadata.uid.
@@ -1513,8 +1548,10 @@ func (t kubevirtTask) replicaSetUID(kubeName string) (uid string, err error) {
 		if err != nil {
 			return "", err
 		}
+		getCtx, getCancel := apiCtx()
 		rs, err := clientset.AppsV1().ReplicaSets(kubeapi.EVEKubeNameSpace).
-			Get(context.Background(), kubeName, metav1.GetOptions{})
+			Get(getCtx, kubeName, metav1.GetOptions{})
+		getCancel()
 		if err != nil {
 			return "", err
 		}
@@ -1524,8 +1561,10 @@ func (t kubevirtTask) replicaSetUID(kubeName string) (uid string, err error) {
 	if err != nil {
 		return "", err
 	}
+	getCtx, getCancel := apiCtx()
 	vmirs, err := virtClient.ReplicaSet(kubeapi.EVEKubeNameSpace).
-		Get(context.Background(), kubeName, metav1.GetOptions{})
+		Get(getCtx, kubeName, metav1.GetOptions{})
+	getCancel()
 	if err != nil {
 		return "", err
 	}
@@ -1543,6 +1582,14 @@ func (t kubevirtTask) Info(domainName string) (int, types.SwState, error) {
 	nodeName, ok := t.nodeNameMap["nodename"]
 	if !ok {
 		return 0, types.BROKEN, logError("Failed to get nodeName")
+	}
+
+	// Fill in kubeConfig here. The receiver is a value, so the getConfig
+	// call in replicaSetUID fills in a copy and leaves t.kubeConfig nil.
+	// A nil *rest.Config panics newKubevirtClient below.
+	if err := getConfig(&t.kubevirtContext); err != nil {
+		return t.status.DomainId, types.UNKNOWN, logError(
+			"Info(%s): can not get kubeconfig: %v", domainName, err)
 	}
 
 	kubeName := t.kubeName()

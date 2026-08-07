@@ -25,11 +25,16 @@ import (
 // with no pods in it, i.e. every pod-list confirm-absence check reports
 // "gone" immediately. Sufficient for sweep tests, which are exercising the
 // VMIRS/ReplicaSet object side of confirm-absence, not pod teardown timing.
+// It asserts a non-nil config for the reason given on swapKubevirtClient.
 func swapK8sClientNoPods(t *testing.T) {
 	t.Helper()
 	orig := newK8sClient
 	fakeClientset := fake.NewSimpleClientset()
-	newK8sClient = func(*rest.Config) (kubernetes.Interface, error) {
+	newK8sClient = func(cfg *rest.Config) (kubernetes.Interface, error) {
+		if cfg == nil {
+			t.Errorf("newK8sClient called with a nil *rest.Config: " +
+				"the caller did not populate kubeConfig")
+		}
 		return fakeClientset, nil
 	}
 	t.Cleanup(func() { newK8sClient = orig })
