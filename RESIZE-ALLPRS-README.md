@@ -32,6 +32,7 @@ tips and #6197 and #6190 have moved since. Verify by content before building.
 |--------|-----|
 | Makefile: raise integration rootfs cap to 295MB | the integration content exceeds the upstream 290 cap; still under the 300MB pre-10.2.0 hard limit |
 | volumemgr: adapt #6257's test to the pointer-returning helper | #6240 makes initStatusCtx return *volumemgrContext so the subscriptions it registers and the caller share one context. #6257's new test is written against master, where the helper returns a value, so it takes the address at every call site. Belongs in #6257 once it rebases onto #6240 |
+| built with `FAULT_INJECTION=y` | the fault gates are compiled in only when the top Makefile sees the variable **non-empty**; omitting it passes nothing and yields a normal image that builds and runs identically, so a missed arm is silent. Drive it with `watch-build-package.sh --fault-injection` — never `FAULT_INJECTION=n`, which arms it just as `y` does. The generated `pkg/pillar/lk-build-arg-FAULT_INJECTION` is untracked on purpose: it is what makes the pillar tag `...-dirty-<hash>` rather than collide with the clean image's cache slot |
 
 ## Notes
 
