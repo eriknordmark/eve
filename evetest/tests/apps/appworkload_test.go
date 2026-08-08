@@ -90,7 +90,7 @@ func listKVMDomainDirs(dev *evetest.EdgeDevice, appUUID uuid.UUID) []string {
 }
 
 // kvmDomainPid reads the pid qemu wrote for domainName. found is false if the
-// pidfile is absent or unparseable.
+// pidfile is absent or unparsable.
 func kvmDomainPid(
 	dev *evetest.EdgeDevice, domainName string) (pid int, found bool) {
 	contents, found := readDeviceFile(
