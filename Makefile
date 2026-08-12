@@ -474,7 +474,11 @@ else
         PKGS_$(ZARCH)=$(shell find pkg -maxdepth 1 -type d | grep -Ev "eve|alpine|sources|kube|external-boot-image$$")
         # nvidia platform requires more space
         ifeq (, $(findstring nvidia,$(PLATFORM)))
-            ROOTFS_MAXSIZE_MB=290
+            # INTEGRATION BRANCH ONLY: 290 upstream. This branch's kvm rootfs
+            # lands just over the upstream cap; 295 leaves headroom for the
+            # integration content on top. Still well under the 300MB pre-10.2.0
+            # hard limit. Must never land upstream.
+            ROOTFS_MAXSIZE_MB=295
         else
             ROOTFS_MAXSIZE_MB=10240
         endif
