@@ -19,7 +19,7 @@ are siblings off the same base, not stacked.
 | lf-edge/eve#6257 | `andrewd-zededa:eve-k-purge-lost-delete` | `b594693b5` | purge leaving stale VMIRS generations and volume refs. **Only 2 of its 3 commits are replayed** — see "The #6257 / #6267 purge-test fork" below |
 | lf-edge/eve#6271 | `eriknordmark:kubevirt-graceful-stop` | `b4b27231a` | draft: VMIRS/domain delete-path fixes. **Only its four `kubevirt:` commits are replayed** — see below |
 | lf-edge/eve#6298 | `eriknordmark:zedagent-maintmode-config-refetch` | `49ec898e9` | zedagent re-reads the configuration after maintenance mode clears |
-| lf-edge/eve#6267 | `eriknordmark:appvol-verify` | `8d6499c32` | WIP: kvm→k boot-disk conversion tests + volverify app |
+| lf-edge/eve#6267 | `eriknordmark:appvol-verify` | `b506ec194` | WIP: kvm→k boot-disk conversion tests + volverify app. Its tail commit is `evetest/`-only, so it does **not** invalidate an already-built image |
 | fork#6 | `kvm-to-k-volmig` | `87fca3ec4` | the conversion chain: #6036 + #6063 + the volmig commits |
 
 Each PR is replayed as its own commits rather than merged at its tip, so no
