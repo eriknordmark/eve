@@ -25,11 +25,13 @@
 package apps_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	// revive:disable:dot-imports
 	. "github.com/onsi/gomega"
@@ -54,6 +56,52 @@ const (
 	// assumption evetest.ReadAllPublications already makes for /run/<agent>.
 	kvmDomainStateDir = "/run/hypervisor/kvm"
 )
+
+// csiProvisionerCmdTimeout bounds the one-off kubectl call the Longhorn
+// provisioner workaround makes outside the app namespace, which RunKubectl
+// cannot reach.
+const csiProvisionerCmdTimeout = 20 * time.Second
+
+// kubeEventList is the minimal shape needed from `kubectl get events -o json`:
+// the reason, the human-readable message, and the name of the object the
+// event is about.
+type kubeEventList struct {
+	Items []struct {
+		Reason         string `json:"reason"`
+		Message        string `json:"message"`
+		InvolvedObject struct {
+			Name string `json:"name"`
+		} `json:"involvedObject"`
+	} `json:"items"`
+}
+
+// kubectlEvents lists every event in the EVE app namespace. found is false on
+// the same conditions as kubectlListItems.
+func kubectlEvents(dev *evetest.EdgeDevice) (list kubeEventList, found bool) {
+	stdout, stderr, err := dev.RunKubectl("get events -o json")
+	if err != nil {
+		evetest.Logger().Warnf(
+			"kubectlEvents: kubectl get events failed: %v (stderr: %s)", err, stderr)
+		return list, false
+	}
+	if err := json.Unmarshal([]byte(stdout), &list); err != nil {
+		evetest.Logger().Warnf(
+			"kubectlEvents: failed to parse kubectl events output: %v", err)
+		return list, false
+	}
+	return list, true
+}
+
+// restartCSIProvisioner deletes Longhorn's csi-provisioner pod(s), forcing a
+// fresh leader election and cache. See the REMOVE ME note atop
+// longhorn_provisioner_workaround_test.go for why this exists.
+func restartCSIProvisioner(dev *evetest.EdgeDevice) {
+	if _, stderr, err := dev.RunShellScript(
+		"eve exec kube kubectl -n longhorn-system delete pod -l app=csi-provisioner",
+		csiProvisionerCmdTimeout, 0); err != nil {
+		evetest.Logger().Warnf("restartCSIProvisioner: delete failed: %v (stderr: %s)", err, stderr)
+	}
+}
 
 // listAppVMIRS returns the names of every VMIRS (any generation) that belongs to
 // appUUID. It matches the prefix "<uuid>." on the App-Domain-Name selector
