@@ -25,6 +25,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// Granularity Longhorn provisions volumes at; a claim is rounded up to a multiple
+// of this, so a request that is not one produces a volume larger than was asked for.
+const longhornVolumeBlockSize = 2 * 1024 * 1024
+
 // CreatePVC : creates a Persistent volume of given name and size.
 func CreatePVC(pvcName string, size uint64, log *base.LogObject, storageClass string) error {
 	// Get the Kubernetes clientset
@@ -38,6 +42,15 @@ func CreatePVC(pvcName string, size uint64, log *base.LogObject, storageClass st
 	// PVC minimum supported size is 10MB
 	if size < 10*1024*1024 {
 		size = 10 * 1024 * 1024
+	}
+	// Longhorn provisions a volume rounded up to a 2 MiB multiple, while CDI
+	// validates its upload against the size requested here. An unrounded request
+	// therefore yields a volume larger than the target, and CDI rejects the import
+	// with "Virtual image size N is larger than the reported available storage M"
+	// and retries forever, so the volume is never delivered. Round to the same
+	// granularity Longhorn uses so the request and the provisioned volume agree.
+	if rem := size % longhornVolumeBlockSize; rem != 0 {
+		size += longhornVolumeBlockSize - rem
 	}
 	// Define the Longhorn PVC object
 	pvc := NewPVCDefinition(pvcName, fmt.Sprint(size), nil, nil, storageClass)
