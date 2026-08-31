@@ -2054,7 +2054,15 @@ func (ctx KvmContext) Start(domainName string) error {
 }
 
 // Stop stops a domain
-func (ctx KvmContext) Stop(domainName string, _ bool) error {
+func (ctx KvmContext) Stop(domainName string, force bool) error {
+	// Without force this is an ACPI poweroff request, which a guest that cannot
+	// service it yet - one still early in boot, for instance - simply ignores.
+	// Force means the domain has to go away regardless, which is what the xen
+	// and containerd implementations of this method already do and what
+	// domainmgr escalates to once a graceful request has had its budget.
+	if force {
+		return terminateQemu(kvmStateDir, domainName, "Stop")
+	}
 	if err := execShutdown(GetQmpExecutorSocket(domainName)); err != nil {
 		return logError("Stop: failed to execute shutdown command %v", err)
 	}
@@ -2090,43 +2098,68 @@ func waitProcessGone(pid int, timeout time.Duration) bool {
 	}
 }
 
-// Delete deletes a domain
-func (ctx KvmContext) Delete(domainName string) (result error) {
-	// Capture the qemu pid before tearing down state, so we can guarantee the
-	// process is gone even if the QMP quit below fails or hangs.
-	pid, pidErr := procutils.GetPidFromFile(kvmStateDir + domainName + "/pid")
+// terminateQemu makes the qemu process serving domainName exit and release its
+// resources (memory, assigned PCI devices): the vCPUs are paused, a QMP quit is
+// issued, and a SIGKILL follows if the process is still alive. quit over QMP can
+// fail or hang if the monitor is wedged; without the hard kill the caller would
+// keep seeing the domain as present and never free its resources (the
+// lf-edge/eve#5916 stall).
+//
+// It fails when the process cannot be established to be gone: the pid file was
+// present but unusable, leaving no handle to signal, or the process outlived the
+// SIGKILL. A pid file that is simply absent means there is no process to
+// terminate and is not a failure.
+//
+// stateDir is where the domain's state lives, both its pid file and its monitor
+// socket, taking it as an argument so the behaviour can be exercised without the
+// real /run path. The caller argument only names the caller in the logs. The
+// domain's state directory is left in place: removing it belongs to Delete and
+// Cleanup.
+func terminateQemu(stateDir string, domainName string, caller string) error {
+	// Capture the qemu pid before anything else, so the process can be dealt
+	// with even if the QMP quit below fails or hangs.
+	pid, pidErr := procutils.GetPidFromFile(filepath.Join(stateDir, domainName, "pid"))
 
 	// Issue a QMP `stop` command (not a process signal) to pause the vCPUs,
 	// freezing the guest before we quit it.
-	_, err := os.Stat(GetQmpExecutorSocket(domainName))
-	if err == nil {
-		execStop(GetQmpExecutorSocket(domainName))
-		if err = execQuit(GetQmpExecutorSocket(domainName)); err != nil {
+	socket := qmpExecutorSocket(stateDir, domainName)
+	if _, err := os.Stat(socket); err == nil {
+		execStop(socket)
+		if err := execQuit(socket); err != nil {
 			logError("failed to execute quit command %v", err)
 		}
 	}
 
-	// Backstop: make sure qemu has actually exited and released its resources
-	// (memory, assigned PCI devices). quit over QMP can fail or hang if the
-	// monitor is wedged; without a hard kill the caller would keep seeing the
-	// domain as present and never free its resources (the lf-edge/eve#5916
-	// stall). Wait briefly for a clean exit, then SIGKILL.
-	if pidErr == nil {
+	if pidErr != nil {
+		if errors.Is(pidErr, os.ErrNotExist) {
+			return nil
+		}
+		return logError("%s(%s): no usable pid file, qemu cannot be terminated: %v",
+			caller, domainName, pidErr)
+	}
+	if !waitProcessGone(pid, qemuExitGrace) {
+		logrus.Warnf("%s(%s): qemu pid %d still alive after quit; sending SIGKILL",
+			caller, domainName, pid)
+		_ = syscall.Kill(pid, syscall.SIGKILL)
 		if !waitProcessGone(pid, qemuExitGrace) {
-			logrus.Warnf("Delete(%s): qemu pid %d still alive after quit; sending SIGKILL",
-				domainName, pid)
-			_ = syscall.Kill(pid, syscall.SIGKILL)
-			if !waitProcessGone(pid, qemuExitGrace) {
-				logrus.Errorf("Delete(%s): qemu pid %d survived SIGKILL", domainName, pid)
-			}
+			return logError("%s(%s): qemu pid %d survived SIGKILL",
+				caller, domainName, pid)
 		}
 	}
+	return nil
+}
+
+// Delete deletes a domain
+func (ctx KvmContext) Delete(domainName string) (result error) {
+	// terminateQemu has logged any failure already; carry it to the caller so a
+	// domain whose process is still around is not reported as deleted.
+	termErr := terminateQemu(kvmStateDir, domainName, "Delete")
 
 	if err := os.RemoveAll(kvmStateDir + domainName); err != nil {
 		return logError("failed to clean up domain state directory %s (%v)", domainName, err)
 	}
 
-	return nil
+	return termErr
 }
 
 // decideKvmState maps the containerd task state and the QMP run-state into the
@@ -2243,7 +2276,13 @@ func usbBusPort(USBAddr string) (string, string) {
 
 // GetQmpExecutorSocket returns the path to the qmp socket of a domain
 func GetQmpExecutorSocket(domainName string) string {
-	return filepath.Join(kvmStateDir, domainName, "qmp")
+	return qmpExecutorSocket(kvmStateDir, domainName)
+}
+
+// qmpExecutorSocket returns the path to the qmp socket of a domain whose state
+// lives under stateDir.
+func qmpExecutorSocket(stateDir string, domainName string) string {
+	return filepath.Join(stateDir, domainName, "qmp")
 }
 
 func getQmpListenerSocket(domainName string) string {
