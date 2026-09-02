@@ -85,6 +85,9 @@ import (
 //   - TestHaltUnresponsiveGuest -- a guest which never services the ACPI
 //     poweroff request still halts promptly, because the stop escalates to
 //     terminating the domain. Pulls its image from dl-cdn.alpinelinux.org.
+//   - TestHaltAfterImmediateDeactivate -- an app stopped in the same second
+//     it reports RUNNING still halts promptly; regression test for the
+//     graceful budget an unset virtualization mode used to be granted.
 //   - TestVMAppPurgeReplacesVMIRS -- a plain purge of a healthy app leaves
 //     exactly one VMIRS, named for the new generation. Kubevirt only; skips
 //     on any other hypervisor.
@@ -130,6 +133,9 @@ func TestAppsSuite(test *testing.T) {
 		},
 		evetest.TestCase{
 			Test: TestHaltUnresponsiveGuest,
+		},
+		evetest.TestCase{
+			Test: TestHaltAfterImmediateDeactivate,
 		},
 		evetest.TestCase{
 			Test: TestVMAppPurgeReplacesVMIRS,
