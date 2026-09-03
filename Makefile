@@ -474,7 +474,12 @@ else
         PKGS_$(ZARCH)=$(shell find pkg -maxdepth 1 -type d | grep -Ev "eve|alpine|sources|kube|external-boot-image$$")
         # nvidia platform requires more space
         ifeq (, $(findstring nvidia,$(PLATFORM)))
-            ROOTFS_MAXSIZE_MB=291
+            # STRESS BRANCH ONLY: 290 upstream, 291 on the conversion branch. The
+            # -tags chaos storage-resizer is ~1MB larger than the stock binary,
+            # tipping the kvm rootfs over that. Bump to 295 -- still under the
+            # 300MB pre-10.2.0 hard limit noted above (older devices have a 300MB
+            # rootfs partition). Must never land upstream.
+            ROOTFS_MAXSIZE_MB=295
         else
             ROOTFS_MAXSIZE_MB=10240
         endif
