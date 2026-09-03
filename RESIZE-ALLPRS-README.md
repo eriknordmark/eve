@@ -1,9 +1,15 @@
-# resize-allprs — multi-PR integration branch
+# resize-allprs-oldkernel — multi-PR integration branch (6.12.49 kernel line)
 
 Integration vehicle: it combines still-open PRs so one build and test run sees
 their combined diff. **Never PR'd upstream.**
 
-Base: `upstream/master` @ `f94089001`, 44 commits on top.
+Base: `upstream/master` @ `f94089001`, 46 commits on top.
+
+`resize-allprs` plus one commit: the amd64 guest kernel pinned back to
+**v6.12.49** (`dcdba3ddf871`) from master's v6.12.96 (`5ec53c5d956c`), so a
+conversion-matrix leg can be re-run with the guest kernel as the only
+variable. On 6.12.96 a QEMU AHCI/NCQ command with a zero-length PRDT aborts
+the emulator mid-test; the same legs never showed it on 6.12.49.
 
 ## Included
 
@@ -51,6 +57,7 @@ namespace, and the workaround file calls the promoted method.
 |--------|-----|
 | `volumemgr: adapt #6406's test to the pointer-returning initStatusCtx` | #6406's reclaim test takes the context's address at 11 sites while `initStatusCtx` already returns `*volumemgrContext`, so `cmd/volumemgr` does not compile. Belongs on #6406 once it rebases |
 | `Makefile: raise integration rootfs cap to 295MB` | the integration content exceeds the 291 master sets via #6197; still under the 300MB pre-10.2.0 hard limit |
+| `Pin amd64 kernel back to 6.12.49 for a test` | rewrites `kernel-commits.mk` and `kernel-version.mk`. Master's `KERNEL_COMMIT_amd64_v6.12.96_generic` SHA moves, so replace master's line outright on every rebuild rather than merging it |
 
 The `gcPVCs` reclaim is **no longer branch-local** — #6406 carries it, at
 identical content. Do not re-apply it by hand.
