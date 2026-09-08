@@ -1,77 +1,71 @@
-# resize-allprs-stress — multi-PR integration branch (fault-injection line)
+# appvol-allprs-stress — multi-PR integration branch (fault-injection line)
 
 Integration vehicle: it combines still-open PRs so one build and test run sees
 their combined diff. **Never PR'd upstream.**
 
-Base: `upstream/master` @ `1ddb9ac3a`, 38 commits on top.
+Base: the `resize-allprs-stress` branch (`upstream/master` @ `1ddb9ac3a` + 38
+commits), with 27 commits of app-volume work on top.
 
-The fault-injection twin of `resize-allprs`: an identical PR contribution
-plus fork#7. The two are **parallel lines**, not stacked — verify parity by
-content (`git diff --name-only <a> <b>` must list only the stress surface),
-never by SHA.
+This is the fault-injection line. `appvol-allprs` is the **parallel** branch
+with the same app-volume contribution on top of `resize-allprs-stress`'s
+non-stress twin; the two are siblings off sibling bases, not stacked. Verify
+parity by content, never by SHA.
 
-## Included
+## Inherited from resize-allprs-stress
 
-| source | ref | tip when written | role |
+The conversion chain, the fault-injection harness and the robustness set arrive
+with the base — fork#6, fork#7, #6271, #6442, #6406, #6478's two unique evetest
+commits and #6280 — as does that branch's own branch-local commit. See its
+`RESIZE-ALLPRS-README.md`. Nothing here re-applies any of it.
+
+## Added on top
+
+| source | ref | tip when replayed | role |
 |--------|-----|-----|------|
-| fork#6 | `kvm-to-k-volmig` | `9b5fa8eae` | the conversion chain: #6036 + #6063 + the volmig commits |
-| fork#7 | `resize-watchdog-stress` | `1e9ea2bab` | the fault-injection stress harness: no-pet watchdog, watchdog-during-GPT-write chaos, the chaos storage-resizer pin. **STRESS ONLY — never merge** |
-| lf-edge/eve#6271 | `eriknordmark:kubevirt-graceful-stop` | `6df3bfbb8` | VMIRS/domain delete-path fixes; keep domain bookkeeping until Cleanup |
-| lf-edge/eve#6442 | `andrewd-zededa:eve-k-purge-pvc-partial-annotation` | `7ef13c34b` | a stale volume ref a domain still holds no longer deadlocks the purge |
-| lf-edge/eve#6406 | `andrewd-zededa:eve-k-purge-cleanup-part2` | `679921bd4` | the `gcPVCs` reclaim of a swept stale generation's PVC |
-| lf-edge/eve#6478 | `eriknordmark:purge-during-failover` | `537df2103` | **only its two evetest commits** — see below |
-| lf-edge/eve#6280 | `eriknordmark:purge-fix-validation` | `e37c36485` | evetest: hold the purge end state across a reboot, plus the on-the-spot VM app image |
-
-fork#6 stacks the two conversion PRs, so they are not replayed separately:
-
-| PR | ref | tip |
-|----|-----|-----|
-| lf-edge/eve#6036 | `eriknordmark:kvm-k-baseos-upgrade-blob-reuse` | `a823eebc6` |
-| lf-edge/eve#6063 | `eriknordmark:kvm-to-k-resize` | `d77c54d89` |
+| lf-edge/eve#6267 | `eriknordmark:appvol-verify` | `606de462e` | WIP draft: kvm→k boot-disk conversion tests + the volverify data-volume app. All 20 of its commits are replayed |
 
 Each PR is replayed as its own commits rather than merged at its tip, so no
 unrelated master history rides along.
 
-**Four PRs this branch used to replay have merged upstream** and now arrive with
-the base: #6443 (csihandler idle logging, 09-04), #6314 (accept a cluster PVC
-instead of re-downloading its source, 09-04), #6441 (kvm honours the force flag,
-09-07), #6453 (bound the graceful stop for default-mode guests, 09-07). Do not
-re-add them.
-
-## #6478 contributes two commits
-
-`evetest: purge with the designated node down` (`TestVMAppPurgeDuringFailover`)
-and `evetest: work around a Longhorn CSI-provisioner stall`, which that test
-needs.
-
-The workaround commit was written before #6406 promoted the local
-`kubectlListItems` helper to `EdgeDevice.KubectlListItems`, so it is adapted
-here: `kubectlEvents` goes through `RunKubectl`, `restartCSIProvisioner` keeps
-`RunShellScript` because it targets `longhorn-system` rather than the app
-namespace, and the workaround file calls the promoted method.
+#6267 has been rebased onto current master, so the five commits earlier
+assemblies had to exclude — two that merged upstream, one content-identical to
+the base, and two superseded by master's reorganization of
+`evetest/tests/apps/` into `*_helpers_test.go` — are no longer on its tip. The
+whole tip replays, and the `evetest/broker/provider/qemu.go` conflict earlier
+assemblies had to resolve by hand is gone with it: the PR now carries master's
+`q35,kernel-irqchip=split` machine line alongside its own watchdog args.
 
 ## Branch-local (never upstream)
 
 | change | why |
 |--------|-----|
-| `volumemgr: adapt #6406's test to the pointer-returning initStatusCtx` | #6406's reclaim test takes the context's address at 11 sites while `initStatusCtx` already returns `*volumemgrContext`, so `cmd/volumemgr` does not compile. Belongs on #6406 once it rebases |
+| `baseosmgr: allow shrink with volumes (TEST)` | **TEST ONLY, must never merge.** Fault injection for the app-volume corruption soak: production refuses a cross-flavor conversion that would shrink `/persist` while app volumes exist, and this relaxes that gate so the shrink proceeds, logging a WARNING that names the at-risk volumes. The "cannot determine the decision" case still blocks, and so does the EVE-k→kvm direction, which is refused whether or not volumes exist |
+| `baseosmgr: allow keeping a corrupt volume for analysis` | Marker-gated on `/persist/volmanifest-keep-corrupt`: renames a mismatching volume aside with a `.corrupt` suffix instead of unlinking it, keeping it in the same fscrypt directory so it stays a rename rather than a multi-GiB copy. The marker is absent in the field, leaving the delete unchanged |
+| `pillar: recreate app volumes torn by the resize` | The manifest mechanism: nodeagent records a sha256 manifest of the vault and clear volume directories once the app domains are halted, and baseosmgr verifies each volume on the post-resize boot and removes any not provably intact. New `pkg/pillar/volmanifest` package |
+| `zedagent: keep apps stopped while a conversion verifies volumes` | Some conversion reboots reach userspace on the pre-conversion flavor; starting an app mounts its volume read-write, ext4 rewrites the superblock, and the whole-file hash then condemns a volume nothing damaged |
+| `baseosmgr: log post-resize volume verify coverage` | Reports how many objects the check examined next to how many it condemned, so a clean run is distinguishable from one that measured nothing |
+| `storage-resizer: weight stress watchdog to shrink` | Stress-only. The no-pet ladder ramped evenly from 5s to 300s, putting only two rungs under the ~130s shrink; the first eight rungs now sit below 65s so their resets land inside the shrink, which is the only step that relocates data and so the only one that can tear an app volume. The last two stay long enough to clear shrink+grow. This is what makes this line's `pkg/storage-resizer` pin differ from `resize-allprs-stress`'s |
 
-This line carries no rootfs-cap change; master's 291MB ceiling applies. The kvm
-rootfs measures ~288MB under it, with master's `40fb331bc rootfs: use 1MB
-squashfs blocks on amd64/kvm` setting the block size that gets it there.
+The `gcPVCs` reclaim is **not** branch-local here — #6406 carries it at identical
+content. Do not re-apply it. No rootfs-cap change is needed either: master's
+291 MiB ceiling applies (the check multiplies `ROOTFS_MAXSIZE_MB` by 1024*1024)
+and the kvm rootfs measures 274.8 MiB, 16.2 MiB under it.
+
+The shrink weighting changes `pkg/storage-resizer`, so its content-hash pin is
+recomputed on this line: `50eec94a0db9fb5c7d49372d1eed47c7d1d6a8a4`, against the
+stress base's `bc26c95c…` and the non-stress line's `8ecc2447…`. Recompute with
+`build-tools/bin/linuxkit pkg show-tag pkg/storage-resizer` rather than copying
+across branches. Both `pkg/pillar/Dockerfile` and `pkg/storage-init/Dockerfile`
+pin it.
+
+Build with `FAULT_INJECTION=y`; leaving the flag off passes nothing, and
+`FAULT_INJECTION=n` arms the gates exactly as `y` does.
 
 ## Notes
 
-- `pkg/storage-resizer` is content-hash pinned by **both** `pkg/pillar/Dockerfile`
-  and `pkg/storage-init/Dockerfile`; the value here is the chaos build's
-  `bc26c95c64a2d652cff93f0ac7a5c91ea74f899a`, which differs from the non-stress
-  line's. Recompute with `build-tools/bin/linuxkit pkg show-tag pkg/storage-resizer`
-  rather than copying it across branches.
-- Build with `FAULT_INJECTION=y`; leaving the flag off passes nothing, and
-  `FAULT_INJECTION=n` arms the gates exactly as `y` does.
-- `make check-docker-hashes-consistency` fails on
-  `pkg/external-boot-image/Dockerfile` naming `eve-xen-tools`. That mismatch is
-  upstream's and reproduces on an untouched master checkout.
 - `TestCreateReplicaPodConfig` fails under a non-root `go test` on every branch
   and on master alike — it writes to the real `/run/.kube`. See lf-edge/eve#6290.
+- `GOWORK=off go build ./...` under `evetest/` fails on this host for want of
+  libvirt development headers, on every branch and on master alike. The
+  documented check is `GOWORK=off go vet ./tests/...`.
 - `go build ./...` does not compile the EVE-k paths; use `-tags k`.
