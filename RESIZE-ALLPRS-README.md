@@ -1,9 +1,15 @@
-# resize-allprs — multi-PR integration branch
+# resize-allprs-oldkernel — multi-PR integration branch (6.12.49 kernel line)
 
 Integration vehicle: it combines still-open PRs so one build and test run sees
 their combined diff. **Never PR'd upstream.**
 
-Base: `upstream/master` @ `1ddb9ac3a`, 35 commits on top.
+Base: `upstream/master` @ `1ddb9ac3a`, 37 commits on top.
+
+`resize-allprs` plus one commit: the amd64 guest kernel pinned back to
+**v6.12.49** (`dcdba3ddf871`) from master's v6.12.96 (`5ec53c5d956c`), so a
+conversion-matrix leg can be re-run with the guest kernel as the only
+variable. On 6.12.96 a QEMU AHCI/NCQ command with a zero-length PRDT aborts
+the emulator mid-test; the same legs never showed it on 6.12.49.
 
 ## Included
 
@@ -49,9 +55,10 @@ namespace, and the workaround file calls the promoted method.
 | change | why |
 |--------|-----|
 | `volumemgr: adapt #6406's test to the pointer-returning initStatusCtx` | #6406's reclaim test takes the context's address at 11 sites while `initStatusCtx` already returns `*volumemgrContext`, so `cmd/volumemgr` does not compile. Belongs on #6406 once it rebases |
+| `Pin amd64 kernel back to 6.12.49 for a test` | the one thing that separates this line from `resize-allprs`. `kernel-commits.mk`/`kernel-version.mk` conflict on every rebuild because master's `KERNEL_COMMIT_amd64_v6.12.96_generic` line moves; replace master's line outright rather than merging |
 
 This line carries no rootfs-cap change; master's 291 MiB ceiling applies. The kvm
-rootfs measures 274.8 MiB (288,174,080 bytes), 16.2 MiB under it, with master's
+rootfs measures 274.7 MiB (288,079,872 bytes), 16.3 MiB under it, with master's
 `40fb331bc rootfs: use 1MB squashfs blocks on amd64/kvm` setting the block size
 that gets it there. Note the check multiplies `ROOTFS_MAXSIZE_MB` by 1024*1024,
 so the ceiling is MiB.
