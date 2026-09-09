@@ -66,6 +66,9 @@ func TestNodeClusterSuite(test *testing.T) {
 			Test: TestVMAppPurgeDuringFailover,
 		},
 		evetest.TestCase{
+			Test: TestDNIDandBackupDNID,
+		},
+		evetest.TestCase{
 			Test: TestClusterPVCGCPreservesLiveVolumes,
 		},
 	)
