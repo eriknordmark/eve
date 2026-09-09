@@ -3,7 +3,7 @@
 Integration vehicle: it combines still-open PRs so one build and test run sees
 their combined diff. **Never PR'd upstream.**
 
-Base: `upstream/master` @ `1ddb9ac3a`, 38 commits on top.
+Base: `upstream/master` @ `1ddb9ac3a`, 40 commits on top.
 
 The fault-injection twin of `resize-allprs`: an identical PR contribution
 plus fork#7. The two are **parallel lines**, not stacked — verify parity by
@@ -15,7 +15,7 @@ never by SHA.
 | source | ref | tip when written | role |
 |--------|-----|-----|------|
 | fork#6 | `kvm-to-k-volmig` | `9b5fa8eae` | the conversion chain: #6036 + #6063 + the volmig commits |
-| fork#7 | `resize-watchdog-stress` | `1e9ea2bab` | the fault-injection stress harness: no-pet watchdog, watchdog-during-GPT-write chaos, the chaos storage-resizer pin. **STRESS ONLY — never merge** |
+| fork#7 | `resize-watchdog-stress` | `e8dca3263` | the fault-injection stress harness: no-pet watchdog, watchdog-during-GPT-write chaos, the chaos storage-resizer pin. **STRESS ONLY — never merge** |
 | lf-edge/eve#6271 | `eriknordmark:kubevirt-graceful-stop` | `6df3bfbb8` | VMIRS/domain delete-path fixes; keep domain bookkeeping until Cleanup |
 | lf-edge/eve#6442 | `andrewd-zededa:eve-k-purge-pvc-partial-annotation` | `7ef13c34b` | a stale volume ref a domain still holds no longer deadlocks the purge |
 | lf-edge/eve#6406 | `andrewd-zededa:eve-k-purge-cleanup-part2` | `679921bd4` | the `gcPVCs` reclaim of a swept stale generation's PVC |
@@ -26,8 +26,12 @@ fork#6 stacks the two conversion PRs, so they are not replayed separately:
 
 | PR | ref | tip |
 |----|-----|-----|
-| lf-edge/eve#6036 | `eriknordmark:kvm-k-baseos-upgrade-blob-reuse` | `a823eebc6` |
+| lf-edge/eve#6036 | `eriknordmark:kvm-k-baseos-upgrade-blob-reuse` | `1acf86bfe` |
 | lf-edge/eve#6063 | `eriknordmark:kvm-to-k-resize` | `d77c54d89` |
+
+#6036's tip commit, `vaultmgr: keep the watchdog fed during vault ops`, is
+replayed on top of the fork#6/fork#7 segment: that chain stops at `a823eebc6`,
+so it does not carry it yet.
 
 Each PR is replayed as its own commits rather than merged at its tip, so no
 unrelated master history rides along.
