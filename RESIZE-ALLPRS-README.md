@@ -4,7 +4,8 @@ Integration vehicle: it combines still-open PRs so one build and test run sees
 their combined diff. **Never PR'd upstream.**
 
 Base: the `resize-allprs` branch (`upstream/master` @ `1ddb9ac3a` + 35 commits),
-with 26 commits of app-volume work on top.
+with 26 commits of app-volume work on top, plus #6036's tip commit and this
+README.
 
 This is the non-stress line. `appvol-allprs-stress` is the **parallel** branch
 with the same app-volume contribution on top of `resize-allprs-stress`; the two
@@ -22,6 +23,7 @@ re-applies any of it.
 | source | ref | tip when replayed | role |
 |--------|-----|-----|------|
 | lf-edge/eve#6267 | `eriknordmark:appvol-verify` | `606de462e` | WIP draft: kvm→k boot-disk conversion tests + the volverify data-volume app. All 20 of its commits are replayed |
+| lf-edge/eve#6036 | `eriknordmark:kvm-k-baseos-upgrade-blob-reuse` | `1acf86bfe` | **only its tip commit**, `vaultmgr: keep the watchdog fed during vault ops` — the fork#6 chain the base replays stops at `a823eebc6`, so the rest of #6036 arrives with the base and this one does not |
 
 Each PR is replayed as its own commits rather than merged at its tip, so no
 unrelated master history rides along.
