@@ -125,5 +125,6 @@ func TestKonvertSuite(test *testing.T) {
 		// the two that run on the build under test.
 		evetest.TestCase{Test: TestKvmToKUpgrade},
 		evetest.TestCase{Test: TestKvmToKContentTree},
+		evetest.TestCase{Test: TestKvmToKAppRecreate},
 	)
 }
