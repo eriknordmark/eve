@@ -3,7 +3,7 @@
 Integration vehicle: it combines still-open PRs so one build and test run sees
 their combined diff. **Never PR'd upstream.**
 
-Base: `upstream/master` @ `1ddb9ac3a`, 37 commits on top.
+Base: `upstream/master` @ `1ddb9ac3a`, 39 commits on top.
 
 `resize-allprs` plus one commit: the amd64 guest kernel pinned back to
 **v6.12.49** (`dcdba3ddf871`) from master's v6.12.96 (`5ec53c5d956c`), so a
@@ -26,8 +26,12 @@ fork#6 stacks the two conversion PRs, so they are not replayed separately:
 
 | PR | ref | tip |
 |----|-----|-----|
-| lf-edge/eve#6036 | `eriknordmark:kvm-k-baseos-upgrade-blob-reuse` | `a823eebc6` |
+| lf-edge/eve#6036 | `eriknordmark:kvm-k-baseos-upgrade-blob-reuse` | `1acf86bfe` |
 | lf-edge/eve#6063 | `eriknordmark:kvm-to-k-resize` | `d77c54d89` |
+
+#6036's tip commit, `vaultmgr: keep the watchdog fed during vault ops`, is
+replayed on top of the fork#6 segment: fork#6 stops at `a823eebc6`, so the
+stacked chain does not carry it yet.
 
 Each PR is replayed as its own commits rather than merged at its tip, so no
 unrelated master history rides along.
