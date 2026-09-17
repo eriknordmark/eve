@@ -10,12 +10,13 @@
 // (appstate_helpers_test.go).
 //
 // Everything generic - reading a file, listing a directory, testing for a path,
-// flushing caches, running kubectl - is an EdgeDevice method in the framework
-// (evetest/edgedevice.go); this file only adds what is specific to EVE's
-// workload objects. Note the two error conventions that follow from that: a
-// transport failure surfaces to Gomega, while a failed kubectl call is reported
-// as found=false, because "k3s is not up yet" is an expected transient state a
-// caller inside Eventually should retry on rather than fail.
+// flushing caches, reaching the cluster's kubectl - is an EdgeDevice method in
+// the framework (evetest/edgedevice.go); this file only adds what is specific
+// to EVE's workload objects. Note the two error conventions that follow from
+// that: helpers backed by a framework method surface its error to Gomega,
+// because an error there is a transport failure, while a failed kubectl call is
+// reported as found=false, because "k3s is not up yet" is an expected transient
+// state a caller inside Eventually should retry on rather than fail.
 //
 // Split trigger: if a xen-specific reader is ever needed, break this into
 // kube- and local-domain helper files. Two backends sharing one file is
@@ -25,11 +26,12 @@
 package apps_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"path"
-	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	// revive:disable:dot-imports
 	. "github.com/onsi/gomega"
@@ -39,14 +41,8 @@ import (
 )
 
 const (
-	// appDomainNameLabel holds the owning app's DomainName,
-	// "<uuid>.<version>.<appnum>". See the eveLabelKey constant in
-	// hypervisor/kubevirt.go.
-	//
-	// EVE puts this label in the VMIRS spec.selector.matchLabels and in the VMI
-	// template, but not in the VMIRS metadata.labels. Read the selector. Pillar
-	// attributes a VMIRS the same way, in sweepStaleGenerations.
-	appDomainNameLabel = "App-Domain-Name"
+	// sshCmdTimeout bounds a single kubectl invocation run over SSH.
+	sshCmdTimeout = 20 * time.Second
 
 	// kvmDomainStateDir mirrors hypervisor/kvm.go's kvmStateDir: qemu gets one
 	// directory per domain, holding that domain's pidfile. EVE bind-mounts /run
@@ -55,37 +51,49 @@ const (
 	kvmDomainStateDir = "/run/hypervisor/kvm"
 )
 
-// listAppVMIRS returns the names of every VMIRS (any generation) that belongs to
-// appUUID. It matches the prefix "<uuid>." on the App-Domain-Name selector
-// label, because the label value also carries a version and an appnum that do
-// not matter here. Names are sorted, so a caller can compare the whole set.
+// kubeItemList is the minimal shape needed from `kubectl get <resource> -o
+// json`: a name per item.
+type kubeItemList struct {
+	Items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+	} `json:"items"`
+}
+
+// kubectlListItems lists one Kubernetes resource type from the EVE app
+// namespace. found is false, with a warning logged, if the device is
+// unreachable, k3s is not up, or the output does not parse - all of which are
+// transient states a caller inside Eventually should retry rather than fail on.
 //
-// found is false if the list could not be read. An empty list then means "no
-// VMIRS", and not "the device did not answer".
-func listAppVMIRS(
-	dev *evetest.EdgeDevice, appUUID uuid.UUID) (names []string, found bool) {
-	list, err := dev.KubectlListItems("vmirs")
+// Reaching into Kubernetes at all is a deliberate exception to the framework
+// guideline "assert against the EVE API, not internal state" (README "Writing
+// Tests -> Guidelines"): there is no EVE-API-exposed signal for "how many
+// generations of this app's workload exist" - the cluster-status topic zedkube
+// publishes carries only the single name of the desired generation. Until that
+// gap is closed, this is the only vantage point from which a stale generation
+// surviving a purge is observable at all.
+func kubectlListItems(
+	dev *evetest.EdgeDevice, resource string) (list kubeItemList, found bool) {
+	stdout, err := dev.RunKubectl(
+		"-n "+evetest.EVEKubeAppNamespace+" get "+resource+" -o json", sshCmdTimeout)
 	if err != nil {
-		// k3s may still be starting; a caller inside Eventually retries.
-		evetest.Logger().Warnf("listAppVMIRS: %v", err)
-		return nil, false
+		evetest.Logger().Warnf("kubectlListItems: %v", err)
+		return list, false
 	}
-	prefix := appUUID.String() + "."
-	for _, item := range list.Items {
-		if strings.HasPrefix(
-			item.Spec.Selector.MatchLabels[appDomainNameLabel], prefix) {
-			names = append(names, item.Metadata.Name)
-		}
+	if err := json.Unmarshal([]byte(stdout), &list); err != nil {
+		evetest.Logger().Warnf(
+			"kubectlListItems: failed to parse kubectl %s output: %v", resource, err)
+		return list, false
 	}
-	sort.Strings(names)
-	return names, true
+	return list, true
 }
 
 // listKVMDomainDirs returns the qemu per-domain state directories belonging to
 // appUUID, found by prefix on the domain name ("<uuid>.<version>.<appnum>", see
 // types.DomainConfig.GetTaskName).
 //
-// Note the asymmetry with listAppVMIRS: a kvm domain name carries no purge
+// Note the asymmetry with EdgeDevice.ListAppVMIRS: a kvm domain name carries no purge
 // counter, so two generations of the same app at the same version would share one
 // directory name and be indistinguishable here. That is also why a surviving
 // generation cannot take this shape on kvm at all. What this does catch is a
