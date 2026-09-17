@@ -14,9 +14,11 @@ import (
 // the subtests for efficiency. All subtests pin the device to the Kubevirt
 // hypervisor (aka eve-k).
 //
-// The single-node subtests run before the three-node one, and the happy-path
+// The single-node subtests run before the three-node ones, and the happy-path
 // purge runs before the fault-injecting VMIRS test, so a failure in the
-// ordinary app lifecycle is not masked by chaos.
+// ordinary app lifecycle is not masked by chaos. TestVMAppPurgeDuringFailover
+// runs last: it powers a node off, and it is the only subtest that needs a
+// cluster built from scratch rather than one reset between subtests.
 //
 // TestClusterPVCGCPreservesLiveVolumes runs last: it lowers timer.gc.vdisk to
 // its floor to make volumemgr's PVC garbage collection run continuously, which
@@ -59,6 +61,9 @@ func TestNodeClusterSuite(test *testing.T) {
 		},
 		evetest.TestCase{
 			Test: TestClusterToSingleConversion,
+		},
+		evetest.TestCase{
+			Test: TestVMAppPurgeDuringFailover,
 		},
 		evetest.TestCase{
 			Test: TestClusterPVCGCPreservesLiveVolumes,
