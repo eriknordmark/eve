@@ -1,92 +1,60 @@
-# resize-allprs-stress — multi-PR integration branch
+# appvol-allprs-stress — multi-PR integration branch
 
 Integration vehicle: it combines still-open PRs so one build and test run sees
 their combined diff. **Never PR'd upstream.**
 
-Base: `upstream/master` @ `3440b3311`, 56 commits on top.
+Base: the `resize-allprs-stress` branch (`upstream/master` @ `3440b3311` + 56
+commits), with 15 commits of app-volume work on top.
 
-## Included
-
-| source | ref | tip when written | role |
-|--------|-----|-----|------|
-| fork#7 | `resize-watchdog-stress` | `244ed5eac` | the conversion chain plus the fault-injection stress harness: #6530 + #6063 + fork#6 + the watchdog chaos commits |
-| lf-edge/eve#6442 | `andrewd-zededa:eve-k-purge-pvc-partial-annotation` | `7ef13c34b` | a stale volume ref a domain still holds no longer deadlocks the purge |
-| lf-edge/eve#6406 | `andrewd-zededa:eve-k-purge-cleanup-part2` | `679921bd4` | the `gcPVCs` reclaim of a swept stale generation's PVC, and its evetest coverage |
-| lf-edge/eve#6478 | `eriknordmark:purge-during-failover` | `dac605926` | purge with the designated node down, the kubectl framework promotion it rests on, and its Longhorn CSI workaround |
-| lf-edge/eve#6505 | `andrewd-zededa:eve-k-backup-dnid` | `e4688995f` | a healthy peer acts for a downed node's designated app: the eve-app-op lease, the node-health cache and threshold, the kubevirt/volumemgr work that lets the peer actually build and delete, and its evetest coverage |
-| lf-edge/eve#6451 | `eriknordmark:vault-mode-recovery` | `386955027` | vaultmgr recovers a vault whose key mode does not match the one the device would derive now |
-| lf-edge/eve#6590 | `rene:fix-sriov-pr` | `b06957a35` | the SR-IOV device plugin is deployed only when network VFs exist, and one wedged system pod no longer pins the node out of RUNNING |
-| lf-edge/eve#6599 | `eriknordmark:kube-init-k3s-deadlines` | `89c8283e9` | k3s start deadlines raised to 30 minutes |
-
-fork#7 stacks the conversion chain, so its pieces are not replayed separately:
-
-| PR | ref | tip |
-|----|-----|-----|
-| lf-edge/eve#6530 | `eriknordmark:vault-zvol-migration-cleanup` | `263af5b10` |
-| lf-edge/eve#6063 | `eriknordmark:kvm-to-k-resize` | `65b51421a` |
-| fork#6 | `eriknordmark:kvm-to-k-volmig` | `feb92426e` |
-
-This is the **parallel** twin of `resize-allprs`, not a branch stacked on it:
-the two carry an identical PR contribution over sibling bases, and differ only
-by fork#7's three commits and the files they touch. Build it with
+This is the stress line. `appvol-allprs` is the **parallel** branch with the
+same app-volume contribution on top of `resize-allprs`; the two are siblings
+off sibling bases, not stacked on each other. Build this one with
 `FAULT_INJECTION=y`.
+
+## Inherited from resize-allprs-stress
+
+The conversion chain, the fault-injection harness and the robustness set arrive
+with the base — fork#7 (#6530 + #6063 + fork#6 + the watchdog chaos commits),
+#6442, #6406, #6478, #6505 (which carries #6529), #6451, #6590 and #6599 — as
+do that branch's own branch-local `initStatusCtx` adapter and its
+reconciliation of #6406's and #6478's kubectl helpers. See its
+`RESIZE-ALLPRS-README.md`. Nothing here re-applies any of it.
+
+## Added on top
+
+| source | ref | tip when replayed | role |
+|--------|-----|-----|------|
+| lf-edge/eve#6267 | `eriknordmark:appvol-verify` | `5858620fb` | kvm→k boot-disk conversion tests, the ZFS-vault migration and power-cut tests, and the volverify data-volume app. All 8 of its commits are replayed. Its base is master past #6539 and #6540, so it carries every evetest change master has |
 
 Each PR is replayed as its own commits rather than merged at its tip, so no
 unrelated master history rides along.
-
-**#6529 `eve-k-halted-state` is here as #6505's second commit**, not replayed
-separately. #6505 carries the same change one refactor further on — the pod
-lookup behind `dependentsPresent` is extracted into `anyPodMatches`, and
-`TestDependentsPresent` is folded into the surrounding table tests. Replaying
-#6529 on top would apply the halted-state change twice.
-
-The base carries #6036, #6271, #6280, #6240, #6443, #6314, #6441, #6453, #6489
-(master's rootfs ceiling is now 290 MiB), and the merged evetest work of #6539
-and #6540. `git cherry upstream/master` scores all of them `-`; replaying any
-of them re-applies content master already has.
-
-## Where two PRs collide
-
-**#6406 and #6478 each promote the tests/apps kubectl plumbing into
-`EdgeDevice`, with incompatible shapes.** #6406 bakes the app namespace into
-`RunKubectl` and brings a `KubeItemList` rich enough for a PVC's phase; #6478
-takes an explicit namespace and a per-call timeout, which its Longhorn
-workaround needs to reach `longhorn-system`. This branch keeps #6478's runner
-as the only one and moves `KubectlListItems` onto it. Both PRs also pre-date
-master's `VolumeGenerationPolicy` argument on `PurgeApplication`, so their two
-cluster call sites pass `BumpVolumeGeneration`.
-
-**#6478 and #6505 each declare `dnidOutageThresholdKey`** in `tests/cluster`;
-#6505's declaration is kept.
-
-**#6451 and #6530 both rewrite vaultmgr's startup key-mode block.** #6451
-replaces `checkAndPublishVaultConfig` with `vaultKeyMode` / `vaultSupported` /
-`keyDerivationOf` while #6530 adds `CurrentPartitionCommitted` to the handler
-options; the merged form keeps both.
-
-**#6406 and the base collide additively in `purge_helpers_test.go`**
-(`fastStorageReclaimTimeout` against the `deviceRebootTimeout` /
-`postRebootEndStateTimeout` pair #6280 landed) — both sides are kept.
 
 ## Branch-local (never upstream)
 
 | change | why |
 |--------|-----|
-| `volumemgr: adapt #6406's test to the pointer-returning initStatusCtx` | #6406's reclaim test takes the context's address at 11 sites while `initStatusCtx` returns `*volumemgrContext`, so `cmd/volumemgr` does not compile. Belongs on #6406 once it rebases |
-| `evetest: reconcile #6406's and #6478's kubectl` | the collisions above. Belongs on whichever of the two rebases last |
+| `baseosmgr: allow shrink with volumes (TEST)` | **TEST ONLY, must never merge.** Fault injection for the app-volume corruption soak: production refuses a cross-flavor conversion that would shrink `/persist` while app volumes exist, and this relaxes that gate so the shrink proceeds, logging a WARNING that names the at-risk volumes. The "cannot determine the decision" case still blocks, and so does the EVE-k→kvm direction, which is refused whether or not volumes exist |
+| `pillar: recreate app volumes torn by the resize` | The manifest mechanism: nodeagent records a sha256 manifest of the vault and clear volume directories once the app domains are halted, and baseosmgr verifies each volume on the post-resize boot and removes any not provably intact. New `pkg/pillar/volmanifest` package |
+| `baseosmgr: allow keeping a corrupt volume for analysis` | Marker-gated on `/persist/volmanifest-keep-corrupt`: renames a mismatching volume aside with a `.corrupt` suffix instead of unlinking it, keeping it in the same fscrypt directory so it stays a rename rather than a multi-GiB copy. The marker is absent in the field, leaving the delete unchanged |
+| `zedagent: keep apps stopped while a conversion verifies volumes` | Some conversion reboots reach userspace on the pre-conversion flavor; starting an app mounts its volume read-write, ext4 rewrites the superblock, and the whole-file hash then condemns a volume nothing damaged |
+| `baseosmgr: log post-resize volume verify coverage` | Reports how many objects the check examined next to how many it condemned, so a clean run is distinguishable from one that measured nothing |
+| `storage-resizer: weight stress watchdog to shrink` | Biases fork#7's fault injection toward the shrink phase, which is the one that can tear an app volume |
 
-This line carries no rootfs-cap change; master's 290 MiB ceiling applies. Note
-the check multiplies `ROOTFS_MAXSIZE_MB` by 1024*1024, so the ceiling is MiB.
+No rootfs-cap change is needed: master's 290 MiB ceiling applies (the check
+multiplies `ROOTFS_MAXSIZE_MB` by 1024*1024) and the app-volume layer adds no
+rootfs content beyond the base's.
+
+The shrink weighting changes `pkg/storage-resizer`, so this line carries its own
+content-hash pin, `50eec94a0db9fb5c7d49372d1eed47c7d1d6a8a4`, in **both**
+`pkg/pillar/Dockerfile` and `pkg/storage-init/Dockerfile`. Recompute it with
+`build-tools/bin/linuxkit pkg show-tag pkg/storage-resizer` on this branch;
+never copy a pin from another line.
 
 ## Notes
 
-- `pkg/storage-resizer` is content-hash pinned by **both** `pkg/pillar/Dockerfile`
-  and `pkg/storage-init/Dockerfile`; the value here is
-  `bc26c95c64a2d652cff93f0ac7a5c91ea74f899a`, the chaos-instrumented package
-  fork#7's pin commit points at. Recompute with
-  `build-tools/bin/linuxkit pkg show-tag pkg/storage-resizer` rather than copying
-  it from another branch — the non-stress line's value differs, and fork#7's pin
-  commit conflicts on every rebuild.
 - `TestCreateReplicaPodConfig` fails under a non-root `go test` on every branch
   and on master alike — it writes to the real `/run/.kube`. See lf-edge/eve#6290.
+- `GOWORK=off go build ./...` under `evetest/` fails on this host for want of
+  libvirt development headers, on every branch and on master alike. The
+  documented check is `GOWORK=off go vet ./tests/...`.
 - `go build ./...` does not compile the EVE-k paths; use `-tags k`.
