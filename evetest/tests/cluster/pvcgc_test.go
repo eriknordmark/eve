@@ -290,7 +290,7 @@ func TestClusterPVCGCPreservesLiveVolumes(test *testing.T) {
 
 	// The purge moves the app to a new generation. Nothing then refers to the
 	// old generation's PVC. This is the positive control below.
-	cluster.PurgeApplication(appUUID, true, pvcGCPurgeTimeout)
+	cluster.PurgeApplication(appUUID, evetest.BumpVolumeGeneration, true, pvcGCPurgeTimeout)
 	evetest.Checkpoint("purge-complete")
 
 	cluster.WaitUntilAppIsRunning(appUUID, pvcGCAppReadyTimeout)
