@@ -53,13 +53,6 @@ const (
 )
 
 const (
-	// dnidOutageThresholdKey configures how long an app's designated node has
-	// to have been unhealthy before another cluster node may act on that app
-	// in its place. Referenced by its literal string: pillar names it in a Go
-	// constant only where that takeover is implemented, which this test does
-	// not require to be present.
-	dnidOutageThresholdKey = types.GlobalSettingKey("cluster.dnid.backupnode.threshold")
-
 	// dnidOutageThreshold is what this test pins that setting to: six times
 	// the longest it can hold the node down (failoverTimeout plus
 	// purgeCompleteTimeout plus purgeEndStateTimeout), and inside the range
@@ -385,7 +378,7 @@ func TestVMAppPurgeDuringFailover(test *testing.T) {
 	log.Infof("App failed over to device %q", failoverHost.Name())
 	evetest.Checkpoint("failed-over")
 
-	cluster.PurgeApplication(appUUID, true, purgeCompleteTimeout)
+	cluster.PurgeApplication(appUUID, evetest.BumpVolumeGeneration, true, purgeCompleteTimeout)
 	evetest.Checkpoint("purge-complete")
 
 	wantCounter := baselineCounter + 1

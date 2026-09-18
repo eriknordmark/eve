@@ -2261,31 +2261,20 @@ type KubeItemList struct {
 	} `json:"items"`
 }
 
-// RunKubectl runs one kubectl command in EVE's kube container, against the app
-// namespace. Pass everything after "kubectl", such as `get pvc -o json`.
-//
-// This is an exception to the guideline "assert against the EVE API, not
-// internal state" (README, "Writing Tests -> Guidelines"). Some cluster facts
-// have no EVE API form, such as how many generations of a workload exist. Use
-// an EVE API assertion when one exists.
-//
-// The method returns the error and does not fail the test. A booting node
-// reports one until k3s is up, and a caller in Eventually must retry it.
-func (d *EdgeDevice) RunKubectl(args string) (stdout, stderr string, err error) {
-	return d.RunShellScript(
-		"eve exec kube kubectl -n "+EVEKubeAppNamespace+" "+args,
-		kubectlCommandTimeout, 0)
-}
-
 // KubectlListItems lists one resource type from the EVE app namespace. An
 // error means the device was unreachable, k3s was down, or the output did not
 // parse. A caller in Eventually must retry each of these.
+//
+// Reading Kubernetes at all is an exception to the guideline "assert against
+// the EVE API, not internal state" (README, "Writing Tests -> Guidelines"):
+// some cluster facts, such as how many generations of a workload exist, have
+// no EVE API form. Use an EVE API assertion wherever one exists.
 func (d *EdgeDevice) KubectlListItems(resource string) (KubeItemList, error) {
 	var list KubeItemList
-	stdout, stderr, err := d.RunKubectl("get " + resource + " -o json")
+	stdout, err := d.RunKubectl(
+		"-n "+EVEKubeAppNamespace+" get "+resource+" -o json", kubectlCommandTimeout)
 	if err != nil {
-		return list, fmt.Errorf("KubectlListItems: get %s failed: %w (stderr: %s)",
-			resource, err, stderr)
+		return list, fmt.Errorf("KubectlListItems: get %s failed: %w", resource, err)
 	}
 	if err := json.Unmarshal([]byte(stdout), &list); err != nil {
 		return list, fmt.Errorf("KubectlListItems: parsing %s output: %w", resource, err)
@@ -2828,11 +2817,6 @@ func (d *EdgeDevice) WatchNTPSources() (
 	}()
 	return ch, d.trackWatcherUnsub(unsub)
 }
-
-// EVEKubeAppNamespace is the Kubernetes namespace EVE runs app workloads in;
-// both VMIRS objects and their PVCs live there. See
-// pkg/pillar/kubeapi.EVEKubeNameSpace.
-const EVEKubeAppNamespace = "eve-kube-app"
 
 // appDomainNameLabel holds the owning app's DomainName,
 // "<uuid>.<version>.<appnum>" (the eveLabelKey constant in
