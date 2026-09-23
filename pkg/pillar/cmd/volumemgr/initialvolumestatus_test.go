@@ -52,10 +52,10 @@ func TestVolumesToReapSkipsLiveVolume(t *testing.T) {
 		VolumeID:          uuid.Must(uuid.NewV4()),
 		GenerationCounter: 0,
 	}
-	publishVolumeStatus(&ctx, &live)
+	publishVolumeStatus(ctx, &live)
 
 	pvcName := live.GetPVCName()
-	reap := volumesToReap(&ctx, []string{pvcName}, getVolumeStatusByPVC)
+	reap := volumesToReap(ctx, []string{pvcName}, getVolumeStatusByPVC)
 	assert.Empty(t, reap, "a currently-published volume must never be reaped")
 }
 
@@ -74,7 +74,7 @@ func TestVolumesToReapSkipsLiveVolumeWithLocalGeneration(t *testing.T) {
 		GenerationCounter:      2,
 		LocalGenerationCounter: 3,
 	}
-	publishVolumeStatus(&ctx, &live)
+	publishVolumeStatus(ctx, &live)
 
 	pvcName := live.GetPVCName()
 	// The name must carry the sum, not either counter on its own.
@@ -86,7 +86,7 @@ func TestVolumesToReapSkipsLiveVolumeWithLocalGeneration(t *testing.T) {
 		"the key rebuilt from a PVC name must match the live volume's, "+
 			"whatever split of generation counters produced it")
 
-	reap := volumesToReap(&ctx, []string{pvcName}, getVolumeStatusByPVC)
+	reap := volumesToReap(ctx, []string{pvcName}, getVolumeStatusByPVC)
 	assert.Empty(t, reap,
 		"a live volume with a non-zero LocalGenerationCounter must never be reaped")
 }
@@ -101,13 +101,13 @@ func TestVolumesToReapIncludesSupersededGeneration(t *testing.T) {
 		VolumeID:          volID,
 		GenerationCounter: 1,
 	}
-	publishVolumeStatus(&ctx, &live)
+	publishVolumeStatus(ctx, &live)
 
 	stale := types.VolumeStatus{
 		VolumeID:          volID,
 		GenerationCounter: 0,
 	}
-	reap := volumesToReap(&ctx,
+	reap := volumesToReap(ctx,
 		[]string{stale.GetPVCName(), live.GetPVCName()}, getVolumeStatusByPVC)
 	assert.Len(t, reap, 1)
 	assert.Equal(t, stale.GetPVCName(), reap[0].FileLocation,
@@ -122,7 +122,7 @@ func TestVolumesToReapIncludesUnknownVolume(t *testing.T) {
 	orphanID := uuid.Must(uuid.NewV4())
 	pvcName := fmt.Sprintf("%s-pvc-0", orphanID.String())
 
-	reap := volumesToReap(&ctx, []string{pvcName}, getVolumeStatusByPVC)
+	reap := volumesToReap(ctx, []string{pvcName}, getVolumeStatusByPVC)
 	assert.Len(t, reap, 1)
 	assert.Equal(t, orphanID, reap[0].VolumeID)
 }
@@ -142,7 +142,7 @@ func TestVolumesToReapSkipsReplicated(t *testing.T) {
 		}, nil
 	}
 
-	reap := volumesToReap(&ctx, []string{"whatever"}, resolve)
+	reap := volumesToReap(ctx, []string{"whatever"}, resolve)
 	assert.Empty(t, reap, "a replicated volume must never be reaped")
 }
 
@@ -154,7 +154,7 @@ func TestVolumesToReapSkipsUnresolvable(t *testing.T) {
 	orphanID := uuid.Must(uuid.NewV4())
 	goodName := fmt.Sprintf("%s-pvc-0", orphanID.String())
 
-	reap := volumesToReap(&ctx,
+	reap := volumesToReap(ctx,
 		[]string{"not-a-valid-pvc-name", goodName}, getVolumeStatusByPVC)
 	assert.Len(t, reap, 1)
 	assert.Equal(t, orphanID, reap[0].VolumeID)
@@ -171,7 +171,7 @@ func TestGcPVCsSkipsLiveVolumes(t *testing.T) {
 		VolumeID:          uuid.Must(uuid.NewV4()),
 		GenerationCounter: 1,
 	}
-	publishVolumeStatus(&ctx, &live)
+	publishVolumeStatus(ctx, &live)
 
 	origGetPVCList := getPVCList
 	getPVCList = func(*base.LogObject) ([]string, error) {
@@ -179,7 +179,7 @@ func TestGcPVCsSkipsLiveVolumes(t *testing.T) {
 	}
 	t.Cleanup(func() { getPVCList = origGetPVCList })
 
-	assert.NotPanics(t, func() { gcPVCs(&ctx) })
+	assert.NotPanics(t, func() { gcPVCs(ctx) })
 	assert.NotNil(t, ctx.LookupVolumeStatus(live.Key()),
 		"gcPVCs must not have touched the still-published volume")
 }
