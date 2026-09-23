@@ -3,7 +3,7 @@
 
 // Pushes info to zedcloud
 
-package zedagent
+package main
 
 import (
 	"bytes"

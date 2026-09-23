@@ -4,7 +4,7 @@
 // Process input in the form of a collection of VolumeConfig structs
 // from zedmanager and baseosmgr. Publish the status as VolumeStatus
 
-package volumemgr
+package main
 
 import (
 	"flag"

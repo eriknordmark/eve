@@ -3,7 +3,7 @@
 
 //go:build !kubevirt
 
-package volumemgr
+package main
 
 // createOrUpdatePvcDiskMetrics has no work in non kubevirt builds
 func createOrUpdatePvcDiskMetrics(*volumemgrContext) {

@@ -1,7 +1,7 @@
 // Copyright (c) 2020 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package upgradeconverter
+package main
 
 // Inhale the persisted latch information for the app instances so we
 // can tell the sha for the OCI volumes

@@ -3,7 +3,7 @@
 
 // Extract Watchdog information from files
 
-package zedagent
+package main
 
 import (
 	"os"

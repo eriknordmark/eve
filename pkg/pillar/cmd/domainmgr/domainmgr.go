@@ -6,7 +6,7 @@
 // We run a separate go routine for each domU to be able to boot and halt
 // them concurrently and also pick up their state periodically.
 
-package domainmgr
+package main
 
 import (
 	"bufio"

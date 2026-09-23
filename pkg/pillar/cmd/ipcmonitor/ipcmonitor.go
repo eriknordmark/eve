@@ -12,7 +12,7 @@
 // ipcmonitor -a zedmanager -s appImg.obj -t DownloaderConfiga
 //     which corresponds to /run/zedmanager/appImg.obj/DownloaderConfig/
 
-package ipcmonitor
+package main
 
 import (
 	"bytes"

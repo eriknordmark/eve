@@ -1,7 +1,7 @@
 // Copyright (c) 2020 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package domainmgr
+package main
 
 // Periodically extract and publish information about the running processes
 // and their memory, thread, FD, etc usage

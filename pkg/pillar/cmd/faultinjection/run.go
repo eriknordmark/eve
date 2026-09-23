@@ -3,7 +3,7 @@
 
 // A application which exists solely to inject faults
 
-package faultinjection
+package main
 
 import (
 	"flag"

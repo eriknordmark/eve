@@ -20,7 +20,7 @@
 //publishVaultKey and handleVaultKeyFromControllerModify are the relevant
 //methods that handle this functionality.
 
-package vaultmgr
+package main
 
 import (
 	"bytes"

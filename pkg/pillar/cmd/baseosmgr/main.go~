@@ -1,0 +1,12 @@
+// XXX intended to be used for individual binaries - calls Run() after setup
+// XXX is agentName an argument or a local variable?
+func main2(agentName string) {
+	logger, log = agentlog.Init(agentName)
+	arguments := os.Args[1:]
+	ps := pubsub.New(
+		&socketdriver.SocketDriver{Logger: logger, Log: log},
+		logger, log)
+	retval := Run(ps, logger, log, arguments, "")
+	os.Exit(retval)
+}
+

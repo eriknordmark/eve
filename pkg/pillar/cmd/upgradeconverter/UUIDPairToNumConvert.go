@@ -1,7 +1,7 @@
 // Copyright (c) 2022 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package upgradeconverter
+package main
 
 import (
 	"fmt"

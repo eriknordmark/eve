@@ -4,7 +4,7 @@
 // Handle MIME multi-part messages to create cloud-init directory
 // structure
 
-package domainmgr
+package main
 
 import (
 	"fmt"

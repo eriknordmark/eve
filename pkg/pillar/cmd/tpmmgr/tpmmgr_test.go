@@ -3,7 +3,7 @@
 
 //unit-tests for tpmmgr
 
-package tpmmgr
+package main
 
 import (
 	"crypto/x509"

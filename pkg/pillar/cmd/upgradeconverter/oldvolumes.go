@@ -1,7 +1,7 @@
 // Copyright (c) 2020 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package upgradeconverter
+package main
 
 // Look for old VM and OCI volumes in /persist
 

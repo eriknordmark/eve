@@ -3,7 +3,7 @@
 
 // basic zboot partition status APIs
 
-package zedagent
+package main
 
 import (
 	"github.com/lf-edge/eve/pkg/pillar/types"

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-package zedagent
+package main
 
 import "github.com/lf-edge/eve/pkg/pillar/types"
 

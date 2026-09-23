@@ -1,7 +1,7 @@
 // Copyright (c) 2022 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package zfsmanager
+package main
 
 import (
 	"time"

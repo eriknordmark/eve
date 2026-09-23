@@ -5,7 +5,7 @@
 // and publish the results as collections of DownloaderStatus structs.
 // Also process ResolveConfig to produce ResolveStatus
 
-package downloader
+package main
 
 import (
 	"fmt"

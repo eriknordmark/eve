@@ -33,7 +33,7 @@
 // # echo 'ls /x' |  dist/amd64/command -W
 // requested DontWait: no output
 
-package command
+package main
 
 import (
 	"bufio"

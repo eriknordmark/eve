@@ -13,7 +13,7 @@
 //   * zboot status                 <baseosmgr> / <zboot> / <status>
 //   * zedagent status              <zedagent>  / <status>
 
-package nodeagent
+package main
 
 import (
 	"bufio"

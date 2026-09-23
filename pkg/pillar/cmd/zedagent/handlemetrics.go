@@ -3,7 +3,7 @@
 
 // Push metrics to controller
 
-package zedagent
+package main
 
 import (
 	"bytes"

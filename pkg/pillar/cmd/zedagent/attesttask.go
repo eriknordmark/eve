@@ -1,7 +1,7 @@
 // Copyright (c) 2020 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package zedagent
+package main
 
 // all things related to running remote attestation with the Controller
 

@@ -5,7 +5,7 @@
 // Published under "unknown" objType with refcount=0. Moved to
 // other objType when there is a reference.
 
-package volumemgr
+package main
 
 import (
 	"fmt"

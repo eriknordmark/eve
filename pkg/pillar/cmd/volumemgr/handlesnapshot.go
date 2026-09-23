@@ -1,7 +1,7 @@
 // Copyright (c) 2013-2023 Zededa,
 // SPDX-License-Identifier: Apache-2.0
 
-package volumemgr
+package main
 
 import (
 	"encoding/json"

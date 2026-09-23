@@ -3,7 +3,7 @@
 
 // Handle NetworkInstanceStatus from zedrouter
 
-package zedagent
+package main
 
 import (
 	"bytes"

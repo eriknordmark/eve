@@ -5,7 +5,7 @@
 // XXX Should also look at the corresponding AppNetworkStatus and report
 // any errors back as device errors to zedcloud.
 
-package zedagent
+package main
 
 import (
 	"bytes"

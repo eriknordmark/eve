@@ -5,7 +5,7 @@
 // IdentityMgr, and Zedrouter. Collect status from those services and make
 // the combined AppInstanceStatus available to zedagent.
 
-package zedmanager
+package main
 
 import (
 	"encoding/json"

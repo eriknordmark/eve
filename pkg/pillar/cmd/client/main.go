@@ -1,0 +1,1 @@
+../baseosmgr/main.go

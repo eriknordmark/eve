@@ -1,7 +1,7 @@
 // Copyright (c) 2020 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package upgradeconverter
+package main
 
 // Rename volumes in /persist from old format (appinst+sha) to new format (volumeID) and move to /persist/vault for both VM and OCI volumes.
 

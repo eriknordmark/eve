@@ -1,7 +1,7 @@
 // Copyright (c) 2024 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package verifier
+package main
 
 // Logger is an interface for logging, combines the best of logrus.Logger and base.LogObject
 type Logger interface {

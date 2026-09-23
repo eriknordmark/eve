@@ -20,7 +20,7 @@
 // Zedrouter, NIM and wwan are 3 microservices that collectively manage all network
 // services for edge node and deployed applications.
 
-package zedrouter
+package main
 
 import (
 	"context"

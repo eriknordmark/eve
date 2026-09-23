@@ -3,7 +3,7 @@
 
 // zboot config, status and util APIs
 
-package nodeagent
+package main
 
 import (
 	"syscall"

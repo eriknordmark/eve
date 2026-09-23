@@ -1,7 +1,7 @@
 // Copyright (c) 2020-2025 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package zedrouter
+package main
 
 import (
 	"bytes"

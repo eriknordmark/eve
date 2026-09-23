@@ -1,7 +1,7 @@
 // Copyright (c) 2020 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package upgradeconverter
+package main
 
 // Parse the checkpointed protobuf file to determine the relationship between
 // app instances and their drives and the volumes

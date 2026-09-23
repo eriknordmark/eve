@@ -3,7 +3,7 @@
 
 // base os event handlers
 
-package nodeagent
+package main
 
 import (
 	"fmt"

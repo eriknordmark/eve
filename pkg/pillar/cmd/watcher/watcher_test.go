@@ -1,7 +1,7 @@
 // Copyright (c) 2024 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package watcher
+package main
 
 import (
 	"fmt"

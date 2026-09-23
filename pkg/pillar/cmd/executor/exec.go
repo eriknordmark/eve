@@ -4,7 +4,7 @@
 // A single-threaded way to have other microservices request exec of a command
 // in a different container or VM where this executor runs
 
-package executor
+package main
 
 import (
 	"context"

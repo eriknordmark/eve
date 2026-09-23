@@ -4,7 +4,7 @@
 // Wait for having IP addresses for a few minutes
 // so that we are likely to have an address when we run ntp
 
-package waitforaddr
+package main
 
 import (
 	"flag"

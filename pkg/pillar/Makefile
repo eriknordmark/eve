@@ -14,8 +14,8 @@ DOCKER_ARCH_ARGS:=--platform linux/$(ZARCH)
 DOCKER_ARGS:=$(DOCKER_ARCH_ARGS) --build-arg ZARCH=$(ZARCH)
 DOCKER_TAG:=lfedge/eve-pillar:local-$(ZARCH)
 
-APPS = zedbox
-APPS1 = $(notdir $(wildcard cmd/*))
+APPS = $(notdir $(wildcard cmd/*))
+# XXX need to exclude README.md from APPS
 
 # find all GOFILES
 GOFILES = $(shell find . -path ./vendor -prune -o -name '*go' -print)
@@ -27,7 +27,7 @@ all: build
 $(DISTDIR):
 	mkdir -p $(DISTDIR)
 
-build: $(APPS) $(APPS1)
+build: $(APPS)
 
 TAGS=
 ifeq ($(RSTATS),y)
@@ -55,15 +55,9 @@ ifeq ($(DEV),y)
 	GCFLAGS:=-gcflags=all="-N -l"
 endif
 
-$(APPS): $(DISTDIR)/$(APPS)
-$(DISTDIR)/$(APPS): $(DISTDIR)
+$(APPS): $(DISTDIR)
 	@echo "Building $@"
-	GO111MODULE=on GOOS=linux GOARCH=$(ZARCH) go build -mod=vendor $(TAGS) $(GCFLAGS) $(LDFLAGS) -o $@ ./$(@F)
-
-$(APPS1): $(DISTDIR)
-	@echo $@
-	@rm -f $(DISTDIR)/$@
-	@ln -s $(APPS) $(DISTDIR)/$@
+	GO111MODULE=on GOOS=linux GOARCH=$(ZARCH) go build -mod=vendor $(TAGS) $(GCFLAGS) $(LDFLAGS) -o $(DISTDIR)/$@ ./cmd/$(@F)
 
 shell:
 	make -C ../.. shell

@@ -1,4 +1,4 @@
-package zedrouter
+package main
 
 import (
 	"fmt"

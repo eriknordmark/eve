@@ -5,7 +5,7 @@
 // interfaces with zedagent for configuration update
 // interfaces with volumemgr to get the images/blobs as volumes
 
-package baseosmgr
+package main
 
 import (
 	"flag"

@@ -1,7 +1,7 @@
 // Copyright (c) 2017-2018 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package nodeagent
+package main
 
 import (
 	"fmt"

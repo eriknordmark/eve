@@ -23,7 +23,7 @@
 // <datastore>
 //   <zedagent>  <datastore> <config> --> <downloader>
 
-package zedagent
+package main
 
 import (
 	"bytes"

@@ -3,7 +3,7 @@
 
 //go:build kubevirt
 
-package zedkube
+package main
 
 import (
 	"fmt"

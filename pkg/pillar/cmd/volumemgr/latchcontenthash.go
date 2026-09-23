@@ -4,7 +4,7 @@
 // Interact with the persistent mapping from ContentID,
 // ContentID to sha of the content tree
 
-package volumemgr
+package main
 
 import (
 	"github.com/lf-edge/eve/pkg/pillar/types"

@@ -3,7 +3,7 @@
 
 // base os event handlers
 
-package baseosmgr
+package main
 
 import (
 	"fmt"

@@ -1,7 +1,7 @@
 // Copyright (c) 2019-2020 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package downloader
+package main
 
 // for function name consistency
 func handleResolveCreate(ctxArg interface{}, key string,

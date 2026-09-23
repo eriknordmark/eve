@@ -1,7 +1,7 @@
 // Copyright (c) 2019-2020 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package downloader
+package main
 
 import (
 	"time"

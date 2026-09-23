@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // github.com/grandcat/zeroconf: under MIT License
 
-package downloader
+package main
 
 import (
 	"context"

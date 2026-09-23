@@ -3,7 +3,7 @@
 
 // Utility to dump diagnostic information about connectivity
 
-package diag
+package main
 
 import (
 	"bytes"

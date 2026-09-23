@@ -1,7 +1,7 @@
 // Copyright (c) 2022 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package zedagent
+package main
 
 import (
 	zconfig "github.com/lf-edge/eve-api/go/config"

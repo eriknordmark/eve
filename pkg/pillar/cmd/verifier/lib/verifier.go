@@ -9,7 +9,7 @@
 // then attempt to verify sum and optional signature.
 // Once sum is verified, move to DownloadDirname/verified/<sha256>
 
-package verifier
+package main
 
 import (
 	"encoding/hex"

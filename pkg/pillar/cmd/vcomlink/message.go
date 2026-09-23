@@ -1,7 +1,7 @@
 // Copyright (c) 2018-2024 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package vcomlink
+package main
 
 import (
 	"encoding/json"

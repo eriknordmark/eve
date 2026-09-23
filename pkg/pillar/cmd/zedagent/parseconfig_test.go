@@ -1,7 +1,7 @@
 // Copyright (c) 2021 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package zedagent
+package main
 
 import (
 	"crypto/sha256"

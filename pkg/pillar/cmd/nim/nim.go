@@ -1,7 +1,7 @@
 // Copyright (c) 2022 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package nim
+package main
 
 import (
 	"context"

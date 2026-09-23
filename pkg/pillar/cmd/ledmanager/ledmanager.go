@@ -9,7 +9,7 @@
 // When blinking there is a pause of 200ms after each blink and a 1200ms pause
 // after each sequence.
 
-package ledmanager
+package main
 
 import (
 	"flag"
