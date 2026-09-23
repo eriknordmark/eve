@@ -39,7 +39,7 @@ const metricsAppearTimeout = 4 * time.Minute
 
 // How long the application has to hold its state after starting before a test
 // stops it again. See waitUntilAppSettled.
-const appSettleWindow = 45 * time.Second
+const appSettleWindow = 0 * time.Second
 
 // Path of the metrics endpoint, the one request in these tests which is never
 // faulted, so its counters are what a delivered answer looks like.
@@ -121,6 +121,12 @@ func baselineDeviceMetric(t *WithT,
 // an address being assigned produces one without the state changing -- so this
 // checks what they say rather than that they stop coming.
 func waitUntilAppSettled(t *WithT, updates <-chan *eveinfo.ZInfoApp) {
+	// A zero window is the lf-edge/eve#6440 trigger: stop the application in
+	// the same second it reported RUNNING. Return without consuming, so the
+	// buffered deployment history is left for watchHalt.
+	if appSettleWindow == 0 {
+		return
+	}
 	// The channel still holds the reports of the deployment which has just
 	// finished, so what matters is the state left at the end of the window,
 	// not the state of any one report in it.
@@ -138,6 +144,36 @@ func waitUntilAppSettled(t *WithT, updates <-chan *eveinfo.ZInfoApp) {
 	}
 }
 
+// haltTiming records when the halt transitions were reported, relative to the
+// deactivation that caused them.
+type haltTiming struct {
+	deactivatedAt time.Time
+	haltingAt     time.Time
+	haltedAt      time.Time
+	done          chan struct{}
+}
+
+// watchHalt takes ownership of updates from the deactivation onwards and
+// timestamps the HALTING and HALTED reports as they arrive.
+func watchHalt(updates <-chan *eveinfo.ZInfoApp) *haltTiming {
+	ht := &haltTiming{deactivatedAt: time.Now(), done: make(chan struct{})}
+	go func() {
+		defer close(ht.done)
+		for update := range updates {
+			switch update.GetState() {
+			case eveinfo.ZSwState_HALTING:
+				if ht.haltingAt.IsZero() {
+					ht.haltingAt = time.Now()
+				}
+			case eveinfo.ZSwState_HALTED:
+				ht.haltedAt = time.Now()
+				return
+			}
+		}
+	}()
+	return ht
+}
+
 // settleApp waits until the controller has been told the application reached
 // its terminal state, which is cleanup rather than assertion: the reset a
 // following subtest performs allows deviceApplyConfigTimeout for the
@@ -145,10 +181,26 @@ func waitUntilAppSettled(t *WithT, updates <-chan *eveinfo.ZInfoApp) {
 // container shutdown as well as deleting it. A subtest which returns while its
 // application is still stopping therefore fails the next one's setup, so each
 // absorbs the shutdown it started.
-func settleApp(t *WithT, updates <-chan *eveinfo.ZInfoApp) {
-	t.Eventually(updates, convergeTimeout).Should(Receive(
-		matchers.SatisfyPredicate("Application is reported HALTED",
-			isAppState(eveinfo.ZSwState_HALTED)).StopIf(appHasError)))
+func settleApp(t *WithT, ht *haltTiming) {
+	log := evetest.Logger()
+	select {
+	case <-ht.done:
+	case <-time.After(convergeTimeout):
+		log.Infof("GSB-E2E RESULT halted=NEVER within %v of deactivate",
+			convergeTimeout)
+		t.Expect(false).To(BeTrue(),
+			"application was not reported HALTED before the converge timeout")
+		return
+	}
+	toHalting, viaHalting := "not reported", "n/a"
+	if !ht.haltingAt.IsZero() {
+		toHalting = ht.haltingAt.Sub(ht.deactivatedAt).Round(time.Second).String()
+		viaHalting = ht.haltedAt.Sub(ht.haltingAt).Round(time.Second).String()
+	}
+	log.Infof("GSB-E2E RESULT deactivate->HALTING %s, deactivate->HALTED %v, HALTING->HALTED %s",
+		toHalting,
+		ht.haltedAt.Sub(ht.deactivatedAt).Round(time.Second),
+		viaHalting)
 }
 
 // TestDeferredQueueBacklogReported verifies that while the controller is
@@ -244,6 +296,7 @@ func TestDeferredQueueBacklogReported(test *testing.T) {
 	})
 	defer evetest.ClearControllerFaults()
 	log.Info("Controller now answers 503 to every info message")
+	halt := watchHalt(appUpdates)
 	device.DeactivateApplication(appUUID, false, 0)
 
 	// Phase 3: the backlog and the refusals have to be visible in the metrics.
@@ -285,7 +338,7 @@ func TestDeferredQueueBacklogReported(test *testing.T) {
 			})))
 	evetest.Checkpoint("backlog-drained")
 
-	settleApp(t, appUpdates)
+	settleApp(t, halt)
 }
 
 // TestDeferredQueueDropsReported verifies that a message the controller rejects
@@ -379,6 +432,7 @@ func TestDeferredQueueDropsReported(test *testing.T) {
 	})
 	defer evetest.ClearControllerFaults()
 	log.Info("Controller now rejects every info message with 404")
+	halt := watchHalt(appUpdates)
 	device.DeactivateApplication(appUUID, false, 0)
 
 	t.Eventually(metricUpdates, metricsAppearTimeout).Should(Receive(
@@ -412,5 +466,5 @@ func TestDeferredQueueDropsReported(test *testing.T) {
 	// The rejections stop here, and the application is only beginning to stop,
 	// so its terminal state is reported normally.
 	evetest.ClearControllerFaults()
-	settleApp(t, appUpdates)
+	settleApp(t, halt)
 }

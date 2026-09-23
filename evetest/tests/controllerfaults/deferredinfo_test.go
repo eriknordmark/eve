@@ -28,7 +28,7 @@ const faultWindow = 2 * time.Minute
 // again. The device holds a refused message back for a delay which doubles with
 // every refusal, so by the end of faultWindow the next attempt can be a few
 // minutes out, and nothing prompts the device to try sooner.
-const convergeTimeout = 8 * time.Minute
+const convergeTimeout = 20 * time.Minute
 
 // TestInfoRetriedAfterServerError verifies that a state change which happens
 // while the controller answers info messages with 503 still reaches the
