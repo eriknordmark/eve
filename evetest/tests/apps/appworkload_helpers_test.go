@@ -26,7 +26,6 @@
 package apps_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"path"
 	"strconv"
@@ -50,44 +49,6 @@ const (
 	// assumption evetest.ReadAllPublications already makes for /run/<agent>.
 	kvmDomainStateDir = "/run/hypervisor/kvm"
 )
-
-// kubeItemList is the minimal shape needed from `kubectl get <resource> -o
-// json`: a name per item.
-type kubeItemList struct {
-	Items []struct {
-		Metadata struct {
-			Name string `json:"name"`
-		} `json:"metadata"`
-	} `json:"items"`
-}
-
-// kubectlListItems lists one Kubernetes resource type from the EVE app
-// namespace. found is false, with a warning logged, if the device is
-// unreachable, k3s is not up, or the output does not parse - all of which are
-// transient states a caller inside Eventually should retry rather than fail on.
-//
-// Reaching into Kubernetes at all is a deliberate exception to the framework
-// guideline "assert against the EVE API, not internal state" (README "Writing
-// Tests -> Guidelines"): there is no EVE-API-exposed signal for "how many
-// generations of this app's workload exist" - the cluster-status topic zedkube
-// publishes carries only the single name of the desired generation. Until that
-// gap is closed, this is the only vantage point from which a stale generation
-// surviving a purge is observable at all.
-func kubectlListItems(
-	dev *evetest.EdgeDevice, resource string) (list kubeItemList, found bool) {
-	stdout, err := dev.RunKubectl(
-		"-n "+evetest.EVEKubeAppNamespace+" get "+resource+" -o json", sshCmdTimeout)
-	if err != nil {
-		evetest.Logger().Warnf("kubectlListItems: %v", err)
-		return list, false
-	}
-	if err := json.Unmarshal([]byte(stdout), &list); err != nil {
-		evetest.Logger().Warnf(
-			"kubectlListItems: failed to parse kubectl %s output: %v", resource, err)
-		return list, false
-	}
-	return list, true
-}
 
 // listKVMDomainDirs returns the qemu per-domain state directories belonging to
 // appUUID, found by prefix on the domain name ("<uuid>.<version>.<appnum>", see
