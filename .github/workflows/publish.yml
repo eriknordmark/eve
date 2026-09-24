@@ -1,16 +1,13 @@
 # Copyright (c) 2025, Zededa, Inc.
 # SPDX-License-Identifier: Apache-2.0
 ---
+# FORK-ONLY rehearsal of the signed publish flow on eriknordmark/eve.
+# Packages are pulled from docker.io/lfedge and never pushed; their
+# signatures live in ghcr.io/eriknordmark (see sign-backfill.yml). EVE and
+# eve-sources are built locally and pushed to ghcr.io/eriknordmark.
 name: Publish
 on:  # yamllint disable-line rule:truthy
   push:
-    branches:
-      - "master"
-      - "[0-9]+.[0-9]+"
-      - "[0-9]+.[0-9]+-stable"
-    paths-ignore:
-      - '**/*.md'
-      - '.github/**'
     tags:
       - "[0-9]+.[0-9]+.[0-9]+"
       - "[0-9]+.[0-9]+.[0-9]+-lts"
@@ -19,266 +16,130 @@ on:  # yamllint disable-line rule:truthy
 permissions:
   contents: read
 
-# Signature policy for tools/eve-cosign.sh; see docs/SIGNING.md.
 env:
-  EVE_COSIGN_IDENTITY_REGEXP: '^https://github\.com/lf-edge/eve/\.github/workflows/(publish|sign-backfill)\.yml@refs/(heads/(master|[0-9]+\.[0-9]+(-stable)?)|tags/[0-9]+\.[0-9]+\.[0-9]+(-lts|-rc[0-9]+)?)$'
-  EVE_COSIGN_REPOSITORY: lf-edge/eve
-  EVE_COSIGN_ENFORCE: ${{ vars.EVE_COSIGN_ENFORCE }}
+  EVE_COSIGN_IDENTITY_REGEXP: '^https://github\.com/eriknordmark/eve/\.github/workflows/(publish|sign-backfill)\.yml@refs/(heads/(master|cosign-signing|[0-9]+\.[0-9]+(-stable)?)|tags/[0-9]+\.[0-9]+\.[0-9]+(-lts|-rc[0-9]+)?)$'
+  EVE_COSIGN_REPOSITORY: eriknordmark/eve
+  EVE_COSIGN_ENFORCE: 'true'
+  EVE_SIG_PREFIX: ghcr.io/eriknordmark
+  FORK_REGISTRY: ghcr.io/eriknordmark
+  DOCKERHUB_PULL_USER: ${{ secrets.DOCKERHUB_PULL_USER }}
 
 jobs:
-  # ════════════════════════════════════════════════════════════════════════
-  # Stage 1: Build and push base generic packages for each architecture.
-  # Stage 2 EVE jobs pull these from the registry; `make pkgs` only
-  # rebuilds any extra HV/platform-specific packages on top.
-  # ════════════════════════════════════════════════════════════════════════
-
-  pkgs-amd64:
-    if: github.event.repository.full_name == 'lf-edge/eve'
-    runs-on: zededa-ubuntu-2204
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Starting Report
-        run: |
-          echo Git Ref: ${{ github.ref }}
-          echo GitHub Event: ${{ github.event_name }}
-          echo Disk usage
-          df -h
-          echo Memory
-          free -m
-      # The tag fetch below runs against github.com, so the GITHUB_TOKEN must
-      # stay in .git/config; anonymous git is subject to GitHub's rate limits.
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 # zizmor: ignore[artipacked]
-        with:
-          fetch-depth: 0
-      - name: Force fetch annotated tags (workaround)
-        run: |
-          git fetch --force --tags
-      - name: Login to Docker Hub
-        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
-        with:
-          username: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
-          password: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
-        with:
-          cosign-release: v3.1.3
-      - name: Build packages
-        run: |
-          SUCCESS=
-          for i in 1 2 3; do
-            echo "Run attempt: $i"
-            if make -e V=1 HV=kvm ZARCH=amd64 PLATFORM=generic LINUXKIT_PKG_TARGET=build PRUNE=1 pkgs; then
-              SUCCESS=true
-              break
-            else
-              docker system prune -f -a --volumes
-            fi
-          done
-          if [ -z "$SUCCESS" ]; then echo "::error::failed to build packages" && exit 1; fi
-      - name: Verify package inputs
-        run: |
-          ./tools/eve-cosign.sh classify "$RUNNER_TEMP/pkgs"
-          ./tools/eve-cosign.sh verify "$RUNNER_TEMP/pkgs/pulled"
-          ./tools/eve-cosign.sh verify-bases "$RUNNER_TEMP/pkgs/built" amd64
-      - name: Push packages
-        run: |
-          SUCCESS=
-          for i in 1 2 3; do
-            echo "Run attempt: $i"
-            if make -e V=1 HV=kvm ZARCH=amd64 PLATFORM=generic LINUXKIT_PKG_TARGET=push PRUNE=1 pkgs; then
-              SUCCESS=true
-              break
-            fi
-          done
-          if [ -z "$SUCCESS" ]; then echo "::error::failed to push packages" && exit 1; fi
-      - name: Sign packages built here
-        run: |
-          ./tools/eve-cosign.sh sign-pkgs "$RUNNER_TEMP/pkgs/built"
-      - name: Post package report
-        run: |
-          echo Disk usage
-          df -h
-          echo Memory
-          free -m
-          docker system df
-          docker system df -v
-      - name: Clean
-        if: ${{ always() }}
-        run: |
-          make clean
-          docker system prune -f -a --volumes
-          rm -rf ~/.linuxkit
-
-  pkgs-arm64:
-    if: github.event.repository.full_name == 'lf-edge/eve'
-    runs-on: zededa-ubuntu-2204-arm64
-    permissions:
-      contents: read
-      id-token: write
-    timeout-minutes: 1440
-    steps:
-      - name: Starting Report
-        run: |
-          echo Git Ref: ${{ github.ref }}
-          echo GitHub Event: ${{ github.event_name }}
-          echo Disk usage
-          df -h
-          echo Memory
-          free -m
-      # The tag fetch below runs against github.com, so the GITHUB_TOKEN must
-      # stay in .git/config; anonymous git is subject to GitHub's rate limits.
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 # zizmor: ignore[artipacked]
-        with:
-          fetch-depth: 0
-      - name: Force fetch annotated tags (workaround)
-        run: |
-          git fetch --force --tags
-      - name: Login to Docker Hub
-        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
-        with:
-          username: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
-          password: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
-        with:
-          cosign-release: v3.1.3
-      - name: Build packages
-        run: |
-          SUCCESS=
-          for i in 1 2 3; do
-            echo "Run attempt: $i"
-            if make -e V=1 HV=kvm ZARCH=arm64 PLATFORM=generic LINUXKIT_PKG_TARGET=build PRUNE=1 pkgs; then
-              SUCCESS=true
-              break
-            else
-              docker system prune -f -a --volumes
-            fi
-          done
-          if [ -z "$SUCCESS" ]; then echo "::error::failed to build packages" && exit 1; fi
-      - name: Verify package inputs
-        run: |
-          ./tools/eve-cosign.sh classify "$RUNNER_TEMP/pkgs"
-          ./tools/eve-cosign.sh verify "$RUNNER_TEMP/pkgs/pulled"
-          ./tools/eve-cosign.sh verify-bases "$RUNNER_TEMP/pkgs/built" arm64
-      - name: Push packages
-        run: |
-          SUCCESS=
-          for i in 1 2 3; do
-            echo "Run attempt: $i"
-            if make -e V=1 HV=kvm ZARCH=arm64 PLATFORM=generic LINUXKIT_PKG_TARGET=push PRUNE=1 pkgs; then
-              SUCCESS=true
-              break
-            fi
-          done
-          if [ -z "$SUCCESS" ]; then echo "::error::failed to push packages" && exit 1; fi
-      - name: Sign packages built here
-        run: |
-          ./tools/eve-cosign.sh sign-pkgs "$RUNNER_TEMP/pkgs/built"
-      - name: Post package report
-        run: |
-          echo Disk usage
-          df -h
-          echo Memory
-          free -m
-          docker system df
-          docker system df -v
-      - name: Clean
-        if: ${{ always() }}
-        run: |
-          make clean
-          docker system prune -f -a --volumes
-          rm -rf ~/.linuxkit
-
-  # ════════════════════════════════════════════════════════════════════════
-  # Stage 2: Build and push EVE images for every variant.
-  # Base generic packages are already in the registry from Stage 1.
-  # Each job builds any remaining HV/platform-specific packages (a fast
-  # delta), pushes them, then builds and pushes the EVE image.
-  # ════════════════════════════════════════════════════════════════════════
-
-  eve:
-    if: github.event.repository.full_name == 'lf-edge/eve'
-    needs: [pkgs-amd64, pkgs-arm64]
+  pkgs:
+    if: github.event.repository.full_name == 'eriknordmark/eve'
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
-      id-token: write
-    timeout-minutes: 1440
+      packages: read
     strategy:
       fail-fast: false
       matrix:
         include:
-          # amd64
-          - arch: amd64
-            hv: kvm
-            platform: "generic"
-            os: zededa-ubuntu-2204
-          - arch: amd64
-            hv: xen
-            platform: "generic"
-            os: zededa-ubuntu-2204
-          - arch: amd64
-            hv: k
-            platform: "generic"
-            os: zededa-ubuntu-2204
-          # arm64 generic
-          - arch: arm64
-            hv: kvm
-            platform: "generic"
-            os: zededa-ubuntu-2204-arm64
-          - arch: arm64
-            hv: xen
-            platform: "generic"
-            os: zededa-ubuntu-2204-arm64
-          - arch: arm64
-            hv: k
-            platform: "generic"
-            os: zededa-ubuntu-2204-arm64
-          # arm64 nvidia
-          - arch: arm64
-            hv: kvm
-            platform: "nvidia-jp5"
-            os: zededa-ubuntu-2204-arm64
-          - arch: arm64
-            hv: kvm
-            platform: "nvidia-jp6"
-            os: zededa-ubuntu-2204-arm64
-          - arch: arm64
-            hv: kvm
-            platform: "nvidia-jp7"
-            os: zededa-ubuntu-2204-arm64
-          - arch: arm64
-            hv: k
-            platform: "nvidia-jp5"
-            os: zededa-ubuntu-2204-arm64
-          - arch: arm64
-            hv: k
-            platform: "nvidia-jp6"
-            os: zededa-ubuntu-2204-arm64
-          - arch: arm64
-            hv: k
-            platform: "nvidia-jp7"
-            os: zededa-ubuntu-2204-arm64
-          # riscv64 (cross-build on amd64 runner via qemu)
-          - arch: riscv64
-            hv: mini
-            platform: "generic"
-            os: zededa-ubuntu-2204
-
+          - {arch: amd64, os: ubuntu-24.04}
+          - {arch: arm64, os: ubuntu-24.04-arm}
     steps:
-      # run-make fetches tags from github.com, so the GITHUB_TOKEN must stay
-      # in .git/config; anonymous git is subject to GitHub's rate limits.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker system prune -af
+          df -h /
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 # zizmor: ignore[artipacked]
+        with:
+          fetch-depth: 0
+      - name: Force fetch annotated tags (workaround)
+        run: |
+          git fetch --force --tags
+      - name: Login to Docker Hub
+        if: env.DOCKERHUB_PULL_USER != ''
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_PULL_USER }}
+          password: ${{ secrets.DOCKERHUB_PULL_TOKEN }}
+      - name: Login to GHCR
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: Build packages
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          SUCCESS=
+          for i in 1 2 3; do
+            echo "Run attempt: $i"
+            if make -e V=1 HV=kvm ZARCH="$ARCH" PLATFORM=generic LINUXKIT_PKG_TARGET=build PRUNE=1 pkgs; then
+              SUCCESS=true
+              break
+            else
+              docker system prune -f -a --volumes
+            fi
+          done
+          if [ -z "$SUCCESS" ]; then echo "::error::failed to build packages" && exit 1; fi
+      - name: Verify package inputs
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          ./tools/eve-cosign.sh classify "$RUNNER_TEMP/pkgs"
+          ./tools/eve-cosign.sh verify "$RUNNER_TEMP/pkgs/pulled"
+          ./tools/eve-cosign.sh verify-bases "$RUNNER_TEMP/pkgs/built" "$ARCH"
+      - name: Require every package from the registry
+        run: |
+          if [ -s "$RUNNER_TEMP/pkgs/built" ]; then
+            echo "::error::the fork cannot push or sign packages; built here:"
+            cat "$RUNNER_TEMP/pkgs/built"
+            exit 1
+          fi
+      - name: Post package report
+        if: ${{ always() }}
+        run: |
+          df -h /
+          docker system df
+
+  eve:
+    if: github.event.repository.full_name == 'eriknordmark/eve'
+    needs: pkgs
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, hv: kvm, platform: generic, os: ubuntu-24.04}
+          - {arch: arm64, hv: kvm, platform: generic, os: ubuntu-24.04-arm}
+    steps:
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker system prune -af
+          df -h /
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 # zizmor: ignore[artipacked]
         with:
           fetch-depth: 0
-      - name: Install qemu for cross-arch build
-        if: matrix.arch == 'riscv64'
-        run: |
-          APT_INSTALL="sudo apt install -y binfmt-support qemu-user-static"
-          $APT_INSTALL || { sudo apt update && $APT_INSTALL ; }
+      - name: Login to Docker Hub
+        if: env.DOCKERHUB_PULL_USER != ''
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_PULL_USER }}
+          password: ${{ secrets.DOCKERHUB_PULL_TOKEN }}
+      - name: Login to GHCR
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
         with:
@@ -287,8 +148,8 @@ jobs:
         uses: ./.github/actions/run-make
         with:
           command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=build PRUNE=1 pkgs"
-          dockerhub-token: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
-          dockerhub-account: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
+          dockerhub-token: ""
+          dockerhub-account: ""
           clean: false
       - name: Verify package inputs
         env:
@@ -297,24 +158,15 @@ jobs:
           ./tools/eve-cosign.sh classify "$RUNNER_TEMP/pkgs"
           ./tools/eve-cosign.sh verify "$RUNNER_TEMP/pkgs/pulled"
           ./tools/eve-cosign.sh verify-bases "$RUNNER_TEMP/pkgs/built" "$ARCH" "$(docker version -f '{{.Server.Arch}}')"
-      - name: Push remaining packages
-        uses: ./.github/actions/run-make
-        with:
-          command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=push PRUNE=1 pkgs"
-          dockerhub-token: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
-          dockerhub-account: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
-          clean: false
-      - name: Sign packages built here
-        run: |
-          ./tools/eve-cosign.sh sign-pkgs "$RUNNER_TEMP/pkgs/built"
+      # LINUXKIT_PKG_TARGET=push on a tag pushes every cached package to
+      # lfedge, so the fork builds into docker and pushes EVE itself.
       - name: Build EVE
         uses: ./.github/actions/run-make
         with:
           command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=build eve"
-          dockerhub-token: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
-          dockerhub-account: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
+          dockerhub-token: ""
+          dockerhub-account: ""
           clean: false
-      # Verify every package the EVE image was composed from before pushing it.
       - name: Verify EVE inputs
         env:
           ARCH: ${{ matrix.arch }}
@@ -322,155 +174,107 @@ jobs:
           ./tools/eve-cosign.sh classify "$RUNNER_TEMP/eve"
           ./tools/eve-cosign.sh verify "$RUNNER_TEMP/eve/pulled"
           ./tools/eve-cosign.sh verify-bases "$RUNNER_TEMP/eve/built" "$ARCH" "$(docker version -f '{{.Server.Arch}}')"
-      - name: Push EVE
+          if [ -s "$RUNNER_TEMP/eve/built" ]; then
+            echo "::error::the fork cannot push or sign packages; built here:"
+            cat "$RUNNER_TEMP/eve/built"
+            exit 1
+          fi
+      - name: Collect SBOM and sources
         uses: ./.github/actions/run-make
         with:
-          command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=push eve"
-          dockerhub-token: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
-          dockerhub-account: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
+          command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=build sbom collected_sources compare_sbom_collected_sources publish_sources"
+          dockerhub-token: ""
+          dockerhub-account: ""
           clean: false
-      - name: Sign packages built by the EVE build
-        run: |
-          ./tools/eve-cosign.sh sign-pkgs "$RUNNER_TEMP/eve/built"
-      - name: Collect and push SBOM and sources
-        uses: ./.github/actions/run-make
-        if: matrix.arch != 'riscv64'
-        with:
-          command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=push sbom collected_sources compare_sbom_collected_sources publish_sources"
-          dockerhub-token: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
-          dockerhub-account: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
-          clean: false
-      - name: Sign release images
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Push EVE and sources to GHCR
         env:
           ARCH: ${{ matrix.arch }}
           MAKE_VARS: "HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }}"
           HV: ${{ matrix.hv }}
         run: |
           # shellcheck disable=SC2086
+          VER=$(make -s $MAKE_VARS version | tail -1)
+          # shellcheck disable=SC2086
           REL=$(make -s $MAKE_VARS LINUXKIT_PKG_TARGET=push eve_rel_info | tail -1)
           [ -n "$REL" ] || { echo "::error::no release name"; exit 1; }
-          ./tools/eve-cosign.sh sign "docker.io/lfedge/eve:$REL-$HV-$ARCH"
-          # The default hypervisor is also released without the HV suffix.
+          push() {
+            docker tag "$1" "$2"
+            docker push "$2"
+          }
+          push "lfedge/eve:$VER-$HV-$ARCH" "$FORK_REGISTRY/eve:$REL-$HV-$ARCH"
           if [ "$HV" = kvm ]; then
-            ./tools/eve-cosign.sh sign "docker.io/lfedge/eve:$REL-$ARCH"
+            push "lfedge/eve:$VER-$HV-$ARCH" "$FORK_REGISTRY/eve:$REL-$ARCH"
           fi
-          if [ "$ARCH" != riscv64 ]; then
-            ./tools/eve-cosign.sh sign "docker.io/lfedge/eve-sources:$REL-$HV-$ARCH"
-            # shellcheck disable=SC2086
-            ./tools/eve-cosign.sh attest-sbom "docker.io/lfedge/eve:$REL-$HV-$ARCH" "$(make -s $MAKE_VARS sbom_info | tail -1)"
+          push "lfedge/eve-sources:$VER-$HV-$ARCH" "$FORK_REGISTRY/eve-sources:$REL-$HV-$ARCH"
+          echo "REL=$REL" >> "$GITHUB_ENV"
+      - name: Sign release images
+        env:
+          ARCH: ${{ matrix.arch }}
+          MAKE_VARS: "HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }}"
+          HV: ${{ matrix.hv }}
+        run: |
+          ./tools/eve-cosign.sh sign "$FORK_REGISTRY/eve:$REL-$HV-$ARCH"
+          if [ "$HV" = kvm ]; then
+            ./tools/eve-cosign.sh sign "$FORK_REGISTRY/eve:$REL-$ARCH"
           fi
-      - name: Clean
+          ./tools/eve-cosign.sh sign "$FORK_REGISTRY/eve-sources:$REL-$HV-$ARCH"
+          # shellcheck disable=SC2086
+          ./tools/eve-cosign.sh attest-sbom "$FORK_REGISTRY/eve:$REL-$HV-$ARCH" "$(make -s $MAKE_VARS sbom_info | tail -1)"
+      - name: Post EVE report
         if: ${{ always() }}
         run: |
-          make clean
-          docker system prune -f -a --volumes
-          rm -rf ~/.linuxkit
+          df -h /
+          docker system df
 
-  # ════════════════════════════════════════════════════════════════════════
-  # Stage 3: Multi-arch manifests and release assets.
-  # Runs after all EVE jobs so every package image has been pushed.
-  # ════════════════════════════════════════════════════════════════════════
-
-  manifest:
-    if: github.event.repository.full_name == 'lf-edge/eve'
-    needs: eve
-    runs-on: zededa-ubuntu-2204
-    steps:
-      # run-make fetches tags from github.com, so the GITHUB_TOKEN must stay
-      # in .git/config; anonymous git is subject to GitHub's rate limits.
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 # zizmor: ignore[artipacked]
-        with:
-          fetch-depth: 0
-      - uses: ./.github/actions/run-make
-        with:
-          command: "V=1 LINUXKIT_PKG_TARGET=manifest pkgs"
-          dockerhub-token: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
-          dockerhub-account: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
-
-  # Sign the multi-arch lfedge/eve indexes once every eve job has pushed; their
-  # per-arch manifests are signed by the eve jobs.
+  # Upstream, linuxkit merges the per-arch pushes into these indexes; the fork
+  # creates them here before signing them.
   sign-release:
-    if: ${{ (startsWith(github.ref, 'refs/tags/')) && (github.event.repository.full_name == 'lf-edge/eve') }}
+    if: github.event.repository.full_name == 'eriknordmark/eve'
     needs: eve
-    runs-on: zededa-ubuntu-2204
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
+      packages: write
       id-token: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           persist-credentials: false
-      - name: Login to Docker Hub
+      - name: Login to GHCR
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
         with:
-          username: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
-          password: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
         with:
           cosign-release: v3.1.3
+      - name: Create release indexes
+        run: |
+          for suffix in "" -kvm; do
+            docker buildx imagetools create -t "$FORK_REGISTRY/eve:${GITHUB_REF_NAME}${suffix}" \
+              "$FORK_REGISTRY/eve:${GITHUB_REF_NAME}${suffix}-amd64" \
+              "$FORK_REGISTRY/eve:${GITHUB_REF_NAME}${suffix}-arm64"
+          done
       - name: Sign release indexes
         run: |
           for plat in "" -nvidia-jp5 -nvidia-jp6 -nvidia-jp7; do
             for hv in "" -kvm -xen -k -mini; do
-              ref="docker.io/lfedge/eve:${GITHUB_REF_NAME}${plat}${hv}"
+              ref="$FORK_REGISTRY/eve:${GITHUB_REF_NAME}${plat}${hv}"
               if docker buildx imagetools inspect --raw "$ref" > /dev/null 2>&1; then
                 ./tools/eve-cosign.sh sign "$ref"
               fi
             done
           done
 
-  coverage:
-    if: github.event.repository.full_name == 'lf-edge/eve'
-    runs-on: zededa-ubuntu-2204
-    steps:
-      - name: Clear repository
-        run: |
-          sudo rm -fr "$GITHUB_WORKSPACE" && mkdir "$GITHUB_WORKSPACE"
-          rm -fr ~/.linuxkit
-          docker system prune --all --force --volumes
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Login to Docker Hub
-        run: |
-          docker login
-      - name: Test
-        run: |
-          make test
-      - name: Report test results as Annotations
-        if: ${{ always() }}
-        uses: guyarb/golang-test-annoations@96fc379b171c49932041d6c789e73331a7bdeec1  # v0.9.0
-        with:
-          test-results: dist/amd64/results.json
-      - name: Store raw test results
-        if: ${{ always() }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
-        with:
-          name: 'test-report'
-          path: ${{ github.workspace }}/dist
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2  # v6.0.0
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-      - name: Clean
-        if: ${{ always() }}
-        run: |
-          make clean
-          docker system prune -f -a --volumes
-          rm -rf ~/.linuxkit
-
   trigger_assets:
-    if: ${{ (startsWith(github.ref, 'refs/tags/')) && (github.event.repository.full_name == 'lf-edge/eve') }}
-    needs: [manifest, eve, sign-release]
+    if: github.event.repository.full_name == 'eriknordmark/eve'
+    needs: [eve, sign-release]
     permissions:
       contents: write
+      packages: read
       id-token: write
     uses: ./.github/workflows/assets.yml
-    secrets:
-      DOCKERHUB_PULL_TOKEN: ${{ secrets.DOCKERHUB_PULL_TOKEN }}
-      DOCKERHUB_PULL_USER: ${{ secrets.DOCKERHUB_PULL_USER }}
     with:
       tag_ref: ${{ github.ref_name }}
