@@ -1,0 +1,88 @@
+# Copyright (c) 2026, Zededa, Inc.
+# SPDX-License-Identifier: Apache-2.0
+---
+# One-time signing of the package images a branch's builds already reuse from
+# Docker Hub, so that tools/eve-cosign.sh verification can be enforced there.
+# Run it on master and on each stable branch that carries the signing change,
+# then set the EVE_COSIGN_ENFORCE repository variable to "true".
+# See docs/SIGNING.md.
+name: Sign backfill
+on:  # yamllint disable-line rule:truthy
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  EVE_COSIGN_IDENTITY_REGEXP: '^https://github\.com/lf-edge/eve/\.github/workflows/(publish|sign-backfill)\.yml@refs/(heads/(master|[0-9]+\.[0-9]+(-stable)?)|tags/[0-9]+\.[0-9]+\.[0-9]+(-lts|-rc[0-9]+)?)$'
+  EVE_COSIGN_REPOSITORY: lf-edge/eve
+
+jobs:
+  backfill:
+    if: >-
+      github.event.repository.full_name == 'lf-edge/eve' &&
+      (github.ref_name == github.event.repository.default_branch ||
+       startsWith(github.ref, 'refs/heads/') && contains(github.ref_name, '.'))
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 1440
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, hv: kvm, platform: generic, os: zededa-ubuntu-2204}
+          - {arch: amd64, hv: xen, platform: generic, os: zededa-ubuntu-2204}
+          - {arch: amd64, hv: k, platform: generic, os: zededa-ubuntu-2204}
+          - {arch: arm64, hv: kvm, platform: generic, os: zededa-ubuntu-2204-arm64}
+          - {arch: arm64, hv: xen, platform: generic, os: zededa-ubuntu-2204-arm64}
+          - {arch: arm64, hv: k, platform: generic, os: zededa-ubuntu-2204-arm64}
+          - {arch: arm64, hv: kvm, platform: nvidia-jp5, os: zededa-ubuntu-2204-arm64}
+          - {arch: arm64, hv: kvm, platform: nvidia-jp6, os: zededa-ubuntu-2204-arm64}
+          - {arch: arm64, hv: kvm, platform: nvidia-jp7, os: zededa-ubuntu-2204-arm64}
+          - {arch: arm64, hv: k, platform: nvidia-jp5, os: zededa-ubuntu-2204-arm64}
+          - {arch: arm64, hv: k, platform: nvidia-jp6, os: zededa-ubuntu-2204-arm64}
+          - {arch: arm64, hv: k, platform: nvidia-jp7, os: zededa-ubuntu-2204-arm64}
+          - {arch: riscv64, hv: mini, platform: generic, os: zededa-ubuntu-2204}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 # zizmor: ignore[artipacked]
+        with:
+          fetch-depth: 0
+      - name: Install qemu for cross-arch build
+        if: matrix.arch == 'riscv64'
+        run: |
+          APT_INSTALL="sudo apt install -y binfmt-support qemu-user-static"
+          $APT_INSTALL || { sudo apt update && $APT_INSTALL ; }
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      # Building without pushing pulls every package the image is composed
+      # from into the linuxkit cache.
+      - name: Build EVE
+        uses: ./.github/actions/run-make
+        with:
+          command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=build pkgs eve"
+          dockerhub-token: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
+          dockerhub-account: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
+          clean: false
+      - name: Sign reused packages and their bases
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          ./tools/eve-cosign.sh classify "$RUNNER_TEMP/eve"
+          if [ -s "$RUNNER_TEMP/eve/built" ]; then
+            echo "::warning::not in the registry, left for the next publish run to sign:"
+            cat "$RUNNER_TEMP/eve/built"
+          fi
+          ./tools/eve-cosign.sh sign-pkgs "$RUNNER_TEMP/eve/pulled"
+          find pkg -mindepth 1 -maxdepth 1 -type d -printf 'eve-%f@\n' > "$RUNNER_TEMP/all-pkgs"
+          ./tools/eve-cosign.sh sign-bases "$RUNNER_TEMP/all-pkgs" "$ARCH" "$(docker version -f '{{.Server.Arch}}')"
+      - name: Clean
+        if: ${{ always() }}
+        run: |
+          make clean
+          docker system prune -f -a --volumes
+          rm -rf ~/.linuxkit

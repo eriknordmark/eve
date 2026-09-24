@@ -16,6 +16,11 @@ on:  # yamllint disable-line rule:truthy
 
 permissions: {}
 
+# Signature policy for tools/eve-cosign.sh; see docs/SIGNING.md.
+env:
+  EVE_COSIGN_IDENTITY_REGEXP: '^https://github\.com/lf-edge/eve/\.github/workflows/publish\.yml@refs/tags/[0-9]+\.[0-9]+\.[0-9]+(-lts|-rc[0-9]+)?$'
+  EVE_COSIGN_REPOSITORY: lf-edge/eve
+
 jobs:
   create_release:
     runs-on: zededa-ubuntu-2204
@@ -53,6 +58,7 @@ jobs:
     needs: create_release
     permissions:
       contents: write
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -116,11 +122,15 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_PULL_USER }}
           password: ${{ secrets.DOCKERHUB_PULL_TOKEN }}
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+        with:
+          cosign-release: v3.1.3
       - name: Pull the EVE release from DockerHUB or build it
         run: |
           HV=${{ matrix.hv }}
           if [ "${{ github.event.repository.full_name }}" = "lf-edge/eve" ]; then
-             EVE=lfedge/eve:${TAG}-${{ env.PLATFORMVER }}${HV}-${{ env.ARCH }}
+             EVE=$(./tools/eve-cosign.sh verify-ref "docker.io/lfedge/eve:${TAG}-${{ env.PLATFORMVER }}${HV}-${{ env.ARCH }}")
              docker pull "$EVE"
           else
              make pkgs
@@ -142,7 +152,13 @@ jobs:
         run: |
           HV=${{ matrix.hv }}
           EVE_SOURCES=lfedge/eve-sources:${TAG}-${{ env.PLATFORMVER }}${HV}-${{ env.ARCH }}
+          if [ "${{ github.event.repository.full_name }}" = "lf-edge/eve" ]; then
+             EVE_SOURCES=$(./tools/eve-cosign.sh verify-ref "docker.io/$EVE_SOURCES")
+          fi
           docker pull "$EVE_SOURCES"
+          # The signed sha256sums then also binds the image digests the
+          # assets came from.
+          printf '%s\n%s\n' "$EVE" "$EVE_SOURCES" > assets/images.txt
           docker create --name eve_sources "$EVE_SOURCES" bash
           docker export --output assets/collected_sources.tar eve_sources
           docker rm eve_sources
@@ -180,6 +196,11 @@ jobs:
           cd ../
           mv "$sha256_file" assets/
           mv "$sizes_file" assets/
+          cosign sign-blob --yes --bundle "assets/$sha256_file.sigstore.json" "assets/$sha256_file"
+          cosign verify-blob --bundle "assets/$sha256_file.sigstore.json" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/assets.yml@$GITHUB_REF" \
+            "assets/$sha256_file"
           # Upload files. Track failures and fail the job at the end so that
           # all assets are attempted before the run is marked failed.
           upload_failed=0
