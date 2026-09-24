@@ -3,6 +3,8 @@
 ---
 # FORK-ONLY: mirrors each reused digest from docker.io/lfedge to
 # ghcr.io/eriknordmark and signs it there (EVE_COSIGN_MIRROR).
+# It also runs on a push to cosign-signing, because workflow_dispatch works
+# only for workflows on the default branch.
 #
 # One-time signing of the package images a branch's builds already reuse from
 # Docker Hub, so that tools/eve-cosign.sh verification can be enforced there.
@@ -12,6 +14,9 @@
 name: Sign backfill
 on:  # yamllint disable-line rule:truthy
   workflow_dispatch:
+  push:
+    branches:
+      - cosign-signing
 
 permissions:
   contents: read
