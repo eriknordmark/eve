@@ -6,8 +6,6 @@ package konvert_test
 import (
 	"fmt"
 	"regexp"
-	"sort"
-	"strconv"
 	"strings"
 
 	// revive:disable:dot-imports
@@ -82,15 +80,28 @@ func (r resizeFaultReport) String() string {
 }
 
 var (
-	resizeAttemptRE    = regexp.MustCompile(`storage-resizer: shrink\+grow requested on \S+ \(attempt (\d+)\)`)
-	resizeShrinkDoneRE = regexp.MustCompile(`storage-resizer: shrink step done \(attempt (\d+)\)`)
+	resizeAttemptRE    = regexp.MustCompile(`storage-resizer: (shrink\+grow|grow-only) requested on \S+ \(attempt \d+\)`)
+	resizeShrinkDoneRE = regexp.MustCompile(`storage-resizer: shrink step done \(attempt \d+\)`)
+	resizeCommittedRE  = regexp.MustCompile(`storage-resizer: (shrink|grow) committed the GPT; rebooting to apply`)
 )
 
-// parseResizerFault derives the report from raw console output. An attempt that
-// is followed by another one was reset part-way; whether that reset landed in the
-// shrink or the grow is decided by whether the resizer got as far as announcing
-// the shrink step done for that same attempt. The final attempt is the one that
-// converged and is never counted as a cut.
+// resizeAttempt is one pass of the resizer's retry loop.
+type resizeAttempt struct {
+	growOnly bool
+	// shrunk: the shrink step finished, so anything that cut this attempt short
+	// landed in the grow.
+	shrunk bool
+	// committed: the attempt ended by committing the GPT, which reboots on
+	// purpose, so it is followed by another attempt without having been cut.
+	committed bool
+}
+
+// parseResizerFault derives the report from raw console output. Attempts are
+// taken in the order the console prints them, because the lines that end one do
+// not carry its number. An attempt followed by another ended early, and that is
+// a cut unless it committed the GPT; a cut lands in the grow if that attempt
+// announced its shrink step done, and in the shrink otherwise. The final attempt
+// is the one that converged and is never a cut.
 func parseResizerFault(console string) resizeFaultReport {
 	var r resizeFaultReport
 
@@ -105,31 +116,30 @@ func parseResizerFault(console string) resizeFaultReport {
 		r.mode = resizerFaultUnknown
 	}
 
-	seen := map[int]bool{}
-	for _, m := range resizeAttemptRE.FindAllStringSubmatch(console, -1) {
-		if n, err := strconv.Atoi(m[1]); err == nil {
-			seen[n] = true
+	var attempts []*resizeAttempt
+	for _, line := range strings.Split(console, "\n") {
+		if m := resizeAttemptRE.FindStringSubmatch(line); m != nil {
+			attempts = append(attempts, &resizeAttempt{growOnly: m[1] == "grow-only"})
+			continue
 		}
-	}
-	shrunk := map[int]bool{}
-	for _, m := range resizeShrinkDoneRE.FindAllStringSubmatch(console, -1) {
-		if n, err := strconv.Atoi(m[1]); err == nil {
-			shrunk[n] = true
+		if len(attempts) == 0 {
+			continue
+		}
+		cur := attempts[len(attempts)-1]
+		switch {
+		case resizeShrinkDoneRE.MatchString(line):
+			cur.shrunk = true
+		case resizeCommittedRE.MatchString(line):
+			cur.committed = true
 		}
 	}
 
-	attempts := make([]int, 0, len(seen))
-	for n := range seen {
-		attempts = append(attempts, n)
-	}
-	sort.Ints(attempts)
 	r.attempts = len(attempts)
-
-	for i, n := range attempts {
-		if i == len(attempts)-1 {
-			break // converged, not cut
+	for i, a := range attempts {
+		if i == len(attempts)-1 || a.committed {
+			continue
 		}
-		if shrunk[n] {
+		if a.shrunk || a.growOnly {
 			r.growCuts++
 		} else {
 			r.shrinkCuts++
