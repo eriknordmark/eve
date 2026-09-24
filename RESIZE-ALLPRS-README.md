@@ -5,7 +5,7 @@ conversion together with the EVE-k robustness fixes it has to survive.
 It is never PR'd upstream; it exists so one build and one eden run see
 the combined diff.
 
-Base: `upstream/master` `adb213cdf`, plus 40 commits.
+Base: `upstream/master` `adb213cdf`, plus 43 commits.
 
 `resize-allprs-stress` is the parallel line: same PR contribution, built
 on the fork#7 fault-injection layer instead of fork#6. `appvol-allprs`
@@ -39,6 +39,12 @@ k3s, Longhorn, CSI, vault. Replayed as cherry-picks onto the chain.
 | #6589 | `96101a167` | 2 | domainmgr: fix node reboot on IoBundle not ours |
 | #6602 | `f255ae289` | 2 | zedrouter: don't crash on a deleted network instance |
 | #6644 | `1a94072b0` | 1 | Give HV=k guests the full poweroff budget |
+| #6451 | `1000210ed` | 3 | vaultmgr: recover a wrong vault key mode |
+
+#6451 is based on #6530's tip `6a230c123`, so its three commits apply
+onto the chain with nothing to reconcile: it rewrites the vaultmgr
+startup block on top of #6530's `CurrentPartitionCommitted` rather than
+against it.
 
 ## Branch-local commits
 
@@ -79,7 +85,6 @@ Recorded so the next rebuild does not rediscover them as omissions.
 | PR | why not |
 |---|---|
 | #6529 hypervisor/kubevirt: base halted state on the whole workload | in master via #6505. `dependentsPresent`, `confirmedAbsent` and all three call sites are there, and `domainmgr.go` is byte-identical. Only `TestDependentsPresent` is unmerged, and master covers the same truth table through `Info()`. Replaying it reverts master's later `anyPodMatches` refactor. |
-| #6451 vaultmgr: recover a wrong vault key mode | under review. It collides with #6530 in `vaultmgr.go`'s startup block — #6530 hoists `CurrentPartitionCommitted` out of the TPM branch, #6451 removes `checkAndPublishVaultConfig` in favor of `vaultKeyMode`/`vaultSupported`/`keyDerivationOf` — and is being checked against #6530 on its own. |
 | #6600 evetest: list parameters declared through a helper | tooling; changes no runtime behavior |
 | #6643 domainmgr: always detach the host framebuffer for an assigned iGPU | iGPU passthrough, unrelated subsystem |
 | #6421 kernel: move amd64 to eve-kernel 6.18.46, hwe flavour for HV=k | a kernel change would confound a soak result |

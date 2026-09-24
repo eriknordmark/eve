@@ -5,7 +5,7 @@ set, plus the work that lets an app's data volume survive the boot-disk
 repartition and the evetest coverage that proves it. It is never PR'd
 upstream.
 
-Base: `upstream/master` `adb213cdf`, plus 64 commits.
+Base: `upstream/master` `adb213cdf`, plus 71 commits.
 
 `appvol-allprs-stress` is the parallel fault-injection line, built on
 `resize-allprs-stress` with an identical PR contribution.
@@ -14,9 +14,9 @@ Base: `upstream/master` `adb213cdf`, plus 64 commits.
 
 The conversion chain (#6530 `6a230c123` → #6063 `b530b9c36` →
 eriknordmark/eve#6 `776632278`), the robustness set (#6442, #6406,
-#6478, #6589, #6602, #6644) and two branch-local #6406 adaptations —
-40 commits. `RESIZE-ALLPRS-README.md` on that branch carries the per-PR
-table and the excluded list, including why #6451 is out.
+#6478, #6589, #6602, #6644, #6451) and two branch-local #6406
+adaptations — 43 commits. `RESIZE-ALLPRS-README.md` on that branch
+carries the per-PR table and the excluded list.
 
 ## App-volume layer
 
@@ -31,6 +31,7 @@ hand on every rebuild.
 | `baseosmgr: allow keeping a corrupt volume for analysis` | keeps a failed volume instead of deleting the evidence |
 | `zedagent: keep apps stopped while a conversion verifies volumes` | holds app activation until the post-resize verify finishes |
 | `baseosmgr: log post-resize volume verify coverage` | reports what the verify actually covered |
+| `evetest: take the newer resize-fault accounting` | brings the resize-fault helpers to #6267's version, which commits the GPT reboots on purpose and classifies a grow-only pass on its own terms |
 
 The first is a test relaxation and must not reach a PR.
 
@@ -38,15 +39,12 @@ The first is a test relaxation and must not reach a PR.
 
 | PR | head | commits | title |
 |---|---|---|---|
-| #6267 | `c9bedfbfe` | 16 | evetest: kvm→k boot-disk conversion tests + volverify app |
-| #6642 | `c22e17681` | 1 | evetest: count reboots from RestartCounter |
+| #6267 | `cae2961ec` | 20 | evetest: kvm→k boot-disk conversion tests + volverify app |
 | #6347 | `d1ec8a290` | 1 | evetest: port eden shutdown_test.txt to TestDeviceShutdownAndRecovery |
 
-#6642 collides with #6267's `evetest infra: opt out of reboot
-accounting` in `evetest/setup.go`: both rewrite the post-reuse reboot
-expectation. The resolution keeps #6267's `rebootAccountingOff` reset
-and #6642's `pendingReboot` condition, which is derived from
-`RestartCounter` rather than from boot time alone.
+#6267 carries the `RestartCounter`-derived reboot accounting that was
+proposed separately as #6642, so the two no longer collide in
+`evetest/setup.go` and #6642 is closed.
 
 ## storage-resizer pin
 
