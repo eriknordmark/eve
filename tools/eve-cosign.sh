@@ -69,7 +69,16 @@ verified() {
         "$1" > /dev/null 2>&1
 }
 
+# FORK-ONLY: copy $1 (a $SIG_PREFIX/<name>@<digest> ref) from $PKG_PREFIX, so
+# that it can be signed in a registry the fork can write to.
+mirror() {
+    [ -n "${EVE_COSIGN_MIRROR:-}" ] || return 0
+    local digest="${1##*@}"
+    crane copy "$PKG_PREFIX/${1#"$SIG_PREFIX"/}" "${1%@*}:bf-${digest#sha256:}"
+}
+
 sign_digest() {
+    mirror "$1"
     if verified "$1"; then
         echo "already signed: $1"
         return
