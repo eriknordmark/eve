@@ -5,7 +5,7 @@ evetest coverage, built on `resize-allprs-stress` so the shrink can be
 interrupted while an app volume is live. This is the branch the
 app-volume corruption soak runs from. It is never PR'd upstream.
 
-Base: `upstream/master` `adb213cdf`, plus 68 commits.
+Base: `upstream/master` `adb213cdf`, plus 75 commits.
 
 `appvol-allprs` is the parallel line, not a parent — the two share an
 identical PR contribution and differ only on the stress surface below.
@@ -16,9 +16,9 @@ From `resize-allprs-stress`: the conversion chain including
 eriknordmark/eve#7 `8c1dfe534`, the robustness set, and fork#7's stress
 layer — see `RESIZE-ALLPRS-STRESS-README.md`, carried on this branch.
 
-From `appvol-allprs`: the five branch-local app-volume commits and the
-test PRs #6267 `c9bedfbfe`, #6642 `c22e17681`, #6347 `d1ec8a290`, with
-the same `evetest/setup.go` resolution between #6642 and #6267.
+From `appvol-allprs`: the five branch-local app-volume commits, the
+branch-local `evetest: take the newer resize-fault accounting`, and the
+test PRs #6267 `cae2961ec` and #6347 `d1ec8a290`.
 
 ## The stress surface
 

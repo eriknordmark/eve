@@ -5,7 +5,7 @@ the same robustness set, built on fork#7's stress layer so the offline
 boot-disk resize can be interrupted on purpose. It is never PR'd
 upstream.
 
-Base: `upstream/master` `adb213cdf`, plus 43 commits.
+Base: `upstream/master` `adb213cdf`, plus 46 commits.
 
 `resize-allprs` is the parallel line, not a parent — the two share an
 identical PR contribution and differ only on the stress surface below.
@@ -40,6 +40,12 @@ to `resize-allprs`.
 | #6589 | `96101a167` | 2 | domainmgr: fix node reboot on IoBundle not ours |
 | #6602 | `f255ae289` | 2 | zedrouter: don't crash on a deleted network instance |
 | #6644 | `1a94072b0` | 1 | Give HV=k guests the full poweroff budget |
+| #6451 | `1000210ed` | 3 | vaultmgr: recover a wrong vault key mode |
+
+#6451 is based on #6530's tip `6a230c123`, so its three commits apply
+onto the chain with nothing to reconcile: it rewrites the vaultmgr
+startup block on top of #6530's `CurrentPartitionCommitted` rather than
+against it.
 
 ## Branch-local commits
 
@@ -86,8 +92,7 @@ suffix rather than the real hash.
 ## Deliberately excluded
 
 Identical to `resize-allprs` — see `RESIZE-ALLPRS-README.md` on that
-branch for the table and the reason per PR. #6451 is out pending its own
-review against #6530.
+branch for the table and the reason per PR.
 
 ## Verification
 
