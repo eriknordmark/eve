@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 ---
 # FORK-ONLY: mirrors each reused digest from docker.io/lfedge to
-# ghcr.io/eriknordmark and signs it there (EVE_COSIGN_MIRROR).
+# the Docker Hub namespace vars.DOCKERHUB_SIGN_NAMESPACE and signs it there (EVE_COSIGN_MIRROR).
 # It also runs on a push to cosign-signing, because workflow_dispatch works
 # only for workflows on the default branch.
 #
@@ -24,7 +24,7 @@ permissions:
 env:
   EVE_COSIGN_IDENTITY_REGEXP: '^https://github\.com/eriknordmark/eve/\.github/workflows/(publish|sign-backfill)\.yml@refs/(heads/(master|cosign-signing|[0-9]+\.[0-9]+(-stable)?)|tags/[0-9]+\.[0-9]+\.[0-9]+(-lts|-rc[0-9]+)?)$'
   EVE_COSIGN_REPOSITORY: eriknordmark/eve
-  EVE_SIG_PREFIX: ghcr.io/eriknordmark
+  EVE_SIG_PREFIX: docker.io/${{ vars.DOCKERHUB_SIGN_NAMESPACE }}
   EVE_COSIGN_MIRROR: 'true'
 
 jobs:
@@ -37,7 +37,6 @@ jobs:
     timeout-minutes: 1440
     permissions:
       contents: read
-      packages: write
       id-token: write
     strategy:
       fail-fast: false
@@ -70,12 +69,11 @@ jobs:
         uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b  # v0.7
         with:
           version: v0.22.1
-      - name: Login to GHCR
+      - name: Login to Docker Hub
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
       # Building without pushing pulls every package the image is composed
       # from into the linuxkit cache.
       - name: Build EVE

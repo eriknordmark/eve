@@ -99,12 +99,11 @@ jobs:
       - name: Ensure clean assets directory
         run: |
           rm -rf assets && mkdir -p assets
-      - name: Login to GHCR
+      - name: Login to Docker Hub
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
         with:
@@ -113,7 +112,7 @@ jobs:
         run: |
           HV=${{ matrix.hv }}
           if [ "${{ github.event.repository.full_name }}" = "eriknordmark/eve" ]; then
-             EVE=$(./tools/eve-cosign.sh verify-ref "ghcr.io/eriknordmark/eve:${TAG}-${{ env.PLATFORMVER }}${HV}-${{ env.ARCH }}")
+             EVE=$(./tools/eve-cosign.sh verify-ref "docker.io/${{ vars.DOCKERHUB_SIGN_NAMESPACE }}/eve:${TAG}-${{ env.PLATFORMVER }}${HV}-${{ env.ARCH }}")
              docker pull "$EVE"
           else
              make pkgs
@@ -166,7 +165,7 @@ jobs:
           HV=${{ matrix.hv }}
           EVE_SOURCES=lfedge/eve-sources:${TAG}-${{ env.PLATFORMVER }}${HV}-${{ env.ARCH }}
           if [ "${{ github.event.repository.full_name }}" = "eriknordmark/eve" ]; then
-             EVE_SOURCES=$(./tools/eve-cosign.sh verify-ref "ghcr.io/eriknordmark/${EVE_SOURCES#lfedge/}")
+             EVE_SOURCES=$(./tools/eve-cosign.sh verify-ref "docker.io/${{ vars.DOCKERHUB_SIGN_NAMESPACE }}/${EVE_SOURCES#lfedge/}")
           fi
           docker pull "$EVE_SOURCES"
           # The signed sha256sums then also binds the image digests the
