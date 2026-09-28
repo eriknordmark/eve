@@ -1,0 +1,2 @@
+ghcr.io/eriknordmark/eve@sha256:1e4d6d3ce9042e5b03d4e8fd1fac2b729d58ecb0bfb8b80df6f9d170407afdd4
+ghcr.io/eriknordmark/eve-sources@sha256:e2230d11549ad562970609a260b27582086e04da7d539c7d4c3d5747369e308d

@@ -10,6 +10,17 @@
 # into the package: see abuild/etc/abuild.conf.
 FROM lfedge/eve-recovertpm:9c4a89c444b3b3baa3f13143f21acb2f20dbb4ec AS recovertpm
 FROM lfedge/eve-bpftrace:78e835b8ac19f730e4b0201a909b82e7f036cb47 AS bpftrace
+# hadolint ignore=DL3029
+FROM --platform=$BUILDPLATFORM lfedge/eve-alpine:ef20bcb617db5545765f4d7486621cf606e5595e AS sigverify
+ARG TARGETARCH
+COPY sigverify/ /sigverify/
+WORKDIR /sigverify
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
+RUN GOARCH=${TARGETARCH} go vet ./... && \
+    ERR=$(gofmt -e -l -s $(find . -name \*.go | grep -v /vendor/)) && \
+    if [ -n "$ERR" ] ; then echo "go fmt Failed - ERR: $ERR"; exit 1 ; fi
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -mod=vendor -ldflags "-s -w" -o eve-sigverify .
+
 FROM lfedge/eve-alpine:ef20bcb617db5545765f4d7486621cf606e5595e AS build
 ENV BUILD_PKGS="abuild curl tar make linux-headers patch g++ git gcc gpg gettext gettext-static ncurses-dev jq autoconf openssl-dev zlib-dev zlib-static gpg-agent"
 # Feel free to add additional packages here, but be aware that
@@ -96,12 +107,16 @@ RUN merge-sbom-db.sh -o /out/lib/apk/db/installed \
 # add recover-tpm to debug container
 WORKDIR /
 COPY --from=recovertpm /usr/bin/recovertpm /out/usr/bin/recovertpm
+COPY --from=sigverify /sigverify/eve-sigverify /out/usr/bin/eve-sigverify
 
 FROM build AS test
 # run collect-info test
 COPY collect-info-test /collect-info-test
 WORKDIR /collect-info-test
 RUN go test
+COPY sigverify /sigverify
+WORKDIR /sigverify
+RUN go test -mod=vendor ./...
 
 FROM scratch
 ENTRYPOINT []
