@@ -1,0 +1,81 @@
+# Copyright (c) 2026 Zededa, Inc.
+# SPDX-License-Identifier: Apache-2.0
+---
+# FORK-ONLY negative control: a signature made by any workflow other than
+# publish.yml/sign-backfill.yml must not satisfy EVE's verification policy.
+name: Cosign negative control
+on:  # yamllint disable-line rule:truthy
+  push:
+    branches:
+      - cosign-negative
+
+permissions: {}
+
+env:
+  EVE_COSIGN_IDENTITY_REGEXP: '^https://github\.com/eriknordmark/eve/\.github/workflows/(publish|sign-backfill)\.yml@refs/(heads/(master|cosign-signing|[0-9]+\.[0-9]+(-stable)?)|tags/[0-9]+\.[0-9]+\.[0-9]+(-lts|-rc[0-9]+)?)$'
+  EVE_COSIGN_REPOSITORY: eriknordmark/eve
+  SOURCE: ghcr.io/eriknordmark/eve-uefi@sha256:387c47af7e85697604f9983dadd9fd64a691858594a2539063b84cb1c8e4e1c6
+  TARGET: ghcr.io/eriknordmark/cosign-negative
+  ISSUER: https://token.actions.githubusercontent.com
+
+jobs:
+  negative:
+    if: github.event.repository.full_name == 'eriknordmark/eve'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: Install crane
+        uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b  # v0.7
+        with:
+          version: v0.22.1
+      - name: Login to GHCR
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Sign a copy under this workflow's identity
+        run: |
+          crane copy "$SOURCE" "$TARGET:negative"
+          ref="$TARGET@${SOURCE##*@}"
+          echo "REF=$ref" >> "$GITHUB_ENV"
+          cosign sign --yes "$ref"
+      - name: Positive control - the signature exists and verifies as this workflow
+        env:
+          SELF: https://github.com/${{ github.repository }}/.github/workflows/cosign-negative.yml@${{ github.ref }}
+        run: |
+          cosign verify --certificate-oidc-issuer "$ISSUER" --certificate-identity "$SELF" "$REF" > /dev/null
+          echo "positive control verified: $REF as $SELF"
+      - name: Negative - EVE policy must reject it
+        run: |
+          fail=0
+          if ./tools/eve-cosign.sh verify-ref "$REF"; then
+            echo "::error::eve-cosign.sh verify-ref accepted a cosign-negative.yml signature"; fail=1
+          else
+            echo "eve-cosign.sh verify-ref rejected it, as required"
+          fi
+          if cosign verify --certificate-oidc-issuer "$ISSUER" \
+               --certificate-identity-regexp "$EVE_COSIGN_IDENTITY_REGEXP" \
+               --certificate-github-workflow-repository "$EVE_COSIGN_REPOSITORY" "$REF" > /dev/null; then
+            echo "::error::cosign verify accepted it under the EVE policy"; fail=1
+          else
+            echo "cosign verify under the EVE policy rejected it, as required"
+          fi
+          if cosign verify --certificate-oidc-issuer "$ISSUER" \
+               --certificate-identity "https://github.com/lf-edge/eve/.github/workflows/cosign-negative.yml@${GITHUB_REF}" \
+               "$REF" > /dev/null; then
+            echo "::error::cosign verify accepted it as an lf-edge/eve identity"; fail=1
+          else
+            echo "cosign verify as lf-edge/eve rejected it, as required"
+          fi
+          exit "$fail"
