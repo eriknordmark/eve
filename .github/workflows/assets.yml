@@ -122,14 +122,44 @@ jobs:
           fi
           echo "EVE=$EVE" >> "$GITHUB_ENV"
       - name: Generate EVE binary assets
+        # The image streams each asset to stdout. Without --log-driver none the
+        # daemon also journals that stream, JSON-escaped, under
+        # /var/lib/docker/containers, which for the ~28 GiB live image fills
+        # the runner's disk; --rm drops each container's scratch image copy.
         run: |
-          docker run "$EVE" installer_raw > assets/installer.raw
-          docker run "$EVE" rootfs > assets/rootfs.img
-          docker run "$EVE" live > assets/live.raw
-          docker run "$EVE" sbom > assets/rootfs.spdx.json
+          docker info --format 'docker logging driver: {{.LoggingDriver}}'
+          # A full disk kills the runner before it uploads the job log, so
+          # abort while there is still room to keep the evidence.
+          (
+            while sleep 15; do
+              avail=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+              echo "[disk $(date -u +%T)] avail=${avail}G"
+              if [ "$avail" -lt 4 ]; then
+                echo "::error::Root filesystem nearly full, killing containers"
+                sudo du -xsh /var/lib/docker/containers /var/lib/docker assets
+                docker ps -q | xargs -r docker kill
+              fi
+            done
+          ) &
+          watcher=$!
+          trap 'kill "$watcher"' EXIT
+          gen() {
+            docker run --rm --log-driver none "$EVE" "$1" > "assets/$2"
+            if [ ! -s "assets/$2" ]; then
+              echo "::error::'$1' produced an empty assets/$2"
+              exit 1
+            fi
+            echo "$1 -> assets/$2 ($(du -h --apparent-size "assets/$2" | cut -f1))"
+            df -h /
+          }
+          df -h /
+          gen installer_raw installer.raw
+          gen rootfs rootfs.img
+          gen live live.raw
+          gen sbom rootfs.spdx.json
           if [ "${{ matrix.platform }}" == "generic" ]; then
-             docker run "$EVE" installer_iso > assets/installer.iso
-             docker run "$EVE" installer_net > assets/installer-net.tar
+             gen installer_iso installer.iso
+             gen installer_net installer-net.tar
           fi
       - name: Export eve-sources to assets/collected_sources.tar
         run: |
@@ -205,3 +235,10 @@ jobs:
             fi
           done
           exit "$upload_failed"
+      - name: Disk usage diagnostics
+        if: always()
+        run: |
+          df -h
+          docker system df
+          sudo du -xsh /var/lib/docker/containers /var/lib/docker || true
+          ls -la assets || true
