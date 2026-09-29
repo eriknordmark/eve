@@ -69,11 +69,6 @@ jobs:
         uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b  # v0.7
         with:
           version: v0.22.1
-      - name: Login to Docker Hub
-        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
-        with:
-          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
-          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
       # Building without pushing pulls every package the image is composed
       # from into the linuxkit cache.
       - name: Build EVE
@@ -83,9 +78,18 @@ jobs:
           dockerhub-token: ""
           dockerhub-account: ""
           clean: false
+      # Reads stay anonymous, so they do not draw on the account's hourly
+      # pull quota; only the copy and signature pushes use these credentials.
+      - name: Store Docker Hub write credentials
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/dockerhub-write
+          ACCOUNT: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          TOKEN: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+        run: echo "$TOKEN" | docker login --username "$ACCOUNT" --password-stdin docker.io
       - name: Sign reused packages and their bases
         env:
           ARCH: ${{ matrix.arch }}
+          EVE_COSIGN_WRITE_CONFIG: ${{ runner.temp }}/dockerhub-write
         run: |
           ./tools/eve-cosign.sh classify "$RUNNER_TEMP/eve"
           if [ -s "$RUNNER_TEMP/eve/built" ]; then
@@ -100,4 +104,4 @@ jobs:
         run: |
           make clean
           docker system prune -f -a --volumes
-          rm -rf ~/.linuxkit
+          rm -rf ~/.linuxkit "$RUNNER_TEMP/dockerhub-write"

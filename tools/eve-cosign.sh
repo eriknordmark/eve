@@ -97,13 +97,23 @@ mirror() {
     crane copy "$PKG_PREFIX/${1#"$SIG_PREFIX"/}" "${1%@*}:bf-${digest#sha256:}"
 }
 
+# FORK-ONLY: run a registry write with the credentials in
+# $EVE_COSIGN_WRITE_CONFIG, so that reads stay anonymous.
+writing() {
+    if [ -n "${EVE_COSIGN_WRITE_CONFIG:-}" ]; then
+        DOCKER_CONFIG="$EVE_COSIGN_WRITE_CONFIG" "$@"
+    else
+        "$@"
+    fi
+}
+
 sign_digest() {
-    mirror "$1"
     if verified "$1"; then
         echo "already signed: $1"
         return
     fi
-    cosign sign --yes "$1"
+    writing mirror "$1"
+    writing cosign sign --yes "$1"
     until_visible cosign_verify "$1" || die "new signature on $1 does not verify under the policy"
     echo "signed: $1"
 }

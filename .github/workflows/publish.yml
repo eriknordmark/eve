@@ -52,11 +52,6 @@ jobs:
       - name: Force fetch annotated tags (workaround)
         run: |
           git fetch --force --tags
-      - name: Login to Docker Hub
-        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
-        with:
-          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
-          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
         with:
@@ -121,11 +116,6 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 # zizmor: ignore[artipacked]
         with:
           fetch-depth: 0
-      - name: Login to Docker Hub
-        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
-        with:
-          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
-          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
         with:
@@ -165,6 +155,13 @@ jobs:
             cat "$RUNNER_TEMP/eve/built"
             exit 1
           fi
+      # Logging in only here keeps the build's pulls off the account's hourly
+      # pull quota.
+      - name: Login to Docker Hub
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
       # Upstream pushes each package it builds to lfedge and then signs it;
       # the fork rehearses that with one package pushed to its own namespace.
       - name: Push and sign a package built here
