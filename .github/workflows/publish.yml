@@ -4,7 +4,9 @@
 # FORK-ONLY rehearsal of the signed publish flow on eriknordmark/eve.
 # Packages are pulled from docker.io/lfedge; their signatures live in the
 # Docker Hub namespace vars.DOCKERHUB_SIGN_NAMESPACE (see sign-backfill.yml).
-# EVE, eve-sources and one package rebuilt here are pushed there and signed.
+# EVE, eve-sources and one package rebuilt here are pushed there. The build
+# jobs hold no signing identity: they upload the pushed digests, and
+# release-sign.yml, called at the sign-master stand-in for master, signs them.
 name: Publish
 on:  # yamllint disable-line rule:truthy
   push:
@@ -19,7 +21,8 @@ permissions:
   contents: read
 
 env:
-  EVE_COSIGN_IDENTITY_REGEXP: '^https://github\.com/eriknordmark/eve/\.github/workflows/(publish|sign-backfill)\.yml@refs/(heads/(master|cosign-signing|[0-9]+\.[0-9]+(-stable)?)|tags/[0-9]+\.[0-9]+\.[0-9]+(-lts|-rc[0-9]+)?)$'
+  # The packages pulled from lfedge carry the backfill's signatures.
+  EVE_COSIGN_IDENTITY_REGEXP: '^https://github\.com/eriknordmark/eve/\.github/workflows/(release-sign\.yml@refs/heads/sign-master|sign-backfill\.yml@refs/heads/cosign-signing)$'
   EVE_COSIGN_REPOSITORY: eriknordmark/eve
   EVE_COSIGN_ENFORCE: ${{ vars.EVE_COSIGN_ENFORCE }}
   EVE_SIG_PREFIX: docker.io/${{ vars.DOCKERHUB_SIGN_NAMESPACE }}
@@ -97,7 +100,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -162,19 +164,39 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
           password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
-      # Upstream pushes each package it builds to lfedge and then signs it;
-      # the fork rehearses that with one package pushed to its own namespace.
-      - name: Push and sign a package built here
+      # record <repo> <digest>: list the digest for release-sign.yml, and the
+      # platform manifests in it when it is an index.
+      - name: Prepare the list of pushed images
+        run: |
+          mkdir -p sign/sbom
+          : > sign/images.txt
+          cat > "$RUNNER_TEMP/record" << 'EOF'
+          record() {
+            local raw
+            echo "$1@$2" >> sign/images.txt
+            raw=$(docker buildx imagetools inspect --raw "$1@$2")
+            case "$(jq -r .mediaType <<< "$raw")" in
+            *index*|*manifest.list*)
+              jq -r --arg r "$1" '.manifests[]
+                | select(.annotations["vnd.docker.reference.type"] != "attestation-manifest")
+                | "\($r)@\(.digest)"' <<< "$raw" >> sign/images.txt
+              ;;
+            esac
+          }
+          EOF
+      # Upstream pushes each package it builds to lfedge; the fork rehearses
+      # that with one package pushed to its own namespace.
+      - name: Push a package built here
         env:
           ARCH: ${{ matrix.arch }}
           NS: ${{ vars.DOCKERHUB_SIGN_NAMESPACE }}
         run: |
+          . "$RUNNER_TEMP/record"
           lk=build-tools/bin/linuxkit
           tag="{{.Hash}}-rehearsal-${GITHUB_REF_NAME}-${ARCH}"
           "$lk" pkg push --force --org "$NS" --tag "$tag" --platforms "linux/$ARCH" pkg/mkconf
-          ref=$("$lk" pkg show-tag --org "$NS" --tag "$tag" pkg/mkconf)
-          ./tools/eve-cosign.sh sign "docker.io/$ref"
-          ./tools/eve-cosign.sh verify-ref "docker.io/$ref"
+          ref=docker.io/$("$lk" pkg show-tag --org "$NS" --tag "$tag" pkg/mkconf)
+          record "${ref%:*}" "$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$ref" | jq -r .digest)"
       - name: Collect SBOM and sources
         uses: ./.github/actions/run-make
         with:
@@ -194,30 +216,28 @@ jobs:
           # shellcheck disable=SC2086
           REL=$(make -s $MAKE_VARS LINUXKIT_PKG_TARGET=push eve_rel_info | tail -1)
           [ -n "$REL" ] || { echo "::error::no release name"; exit 1; }
+          . "$RUNNER_TEMP/record"
+          # push <image> <tag>: print the digest the registry stored.
           push() {
             docker tag "$1" "$2"
-            docker push "$2"
+            docker push "$2" | tee /dev/stderr | sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' | tail -1
           }
-          push "lfedge/eve:$VER-$HV-$ARCH" "$FORK_REGISTRY/eve:$REL-$HV-$ARCH"
+          eve=$(push "lfedge/eve:$VER-$HV-$ARCH" "$FORK_REGISTRY/eve:$REL-$HV-$ARCH")
           if [ "$HV" = kvm ]; then
-            push "lfedge/eve:$VER-$HV-$ARCH" "$FORK_REGISTRY/eve:$REL-$ARCH"
+            [ "$(push "lfedge/eve:$VER-$HV-$ARCH" "$FORK_REGISTRY/eve:$REL-$ARCH")" = "$eve" ] ||
+              { echo "::error::$REL-$ARCH and $REL-$HV-$ARCH differ"; exit 1; }
           fi
-          push "lfedge/eve-sources:$VER-$HV-$ARCH" "$FORK_REGISTRY/eve-sources:$REL-$HV-$ARCH"
-          echo "REL=$REL" >> "$GITHUB_ENV"
-      - name: Sign release images
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          ARCH: ${{ matrix.arch }}
-          MAKE_VARS: "HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }}"
-          HV: ${{ matrix.hv }}
-        run: |
-          ./tools/eve-cosign.sh sign "$FORK_REGISTRY/eve:$REL-$HV-$ARCH"
-          if [ "$HV" = kvm ]; then
-            ./tools/eve-cosign.sh sign "$FORK_REGISTRY/eve:$REL-$ARCH"
-          fi
-          ./tools/eve-cosign.sh sign "$FORK_REGISTRY/eve-sources:$REL-$HV-$ARCH"
+          sources=$(push "lfedge/eve-sources:$VER-$HV-$ARCH" "$FORK_REGISTRY/eve-sources:$REL-$HV-$ARCH")
+          [ -n "$eve" ] && [ -n "$sources" ] || { echo "::error::no digest from docker push"; exit 1; }
+          record "$FORK_REGISTRY/eve" "$eve"
+          record "$FORK_REGISTRY/eve-sources" "$sources"
           # shellcheck disable=SC2086
-          ./tools/eve-cosign.sh attest-sbom "$FORK_REGISTRY/eve:$REL-$HV-$ARCH" "$(make -s $MAKE_VARS sbom_info | tail -1)"
+          cp "$(make -s $MAKE_VARS sbom_info | tail -1)" "sign/sbom/${eve#sha256:}.spdx.json"
+      - name: Upload the list of pushed images
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: sign-images-eve-${{ matrix.arch }}-${{ matrix.hv }}-${{ matrix.platform }}
+          path: sign
       - name: Post EVE report
         if: ${{ always() }}
         run: |
@@ -225,48 +245,51 @@ jobs:
           docker system df
 
   # Upstream, linuxkit merges the per-arch pushes into these indexes; the fork
-  # creates them here before signing them.
-  sign-release:
+  # creates them here.
+  indexes:
     if: github.event.repository.full_name == 'eriknordmark/eve' && startsWith(github.ref, 'refs/tags/')
     needs: eve
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      id-token: write
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-        with:
-          persist-credentials: false
       - name: Login to Docker Hub
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
         with:
           username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
           password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
-        with:
-          cosign-release: v3.1.3
       - name: Create release indexes
         run: |
+          mkdir sign
           for suffix in "" -kvm; do
-            docker buildx imagetools create -t "$FORK_REGISTRY/eve:${GITHUB_REF_NAME}${suffix}" \
-              "$FORK_REGISTRY/eve:${GITHUB_REF_NAME}${suffix}-amd64" \
-              "$FORK_REGISTRY/eve:${GITHUB_REF_NAME}${suffix}-arm64"
+            ref="$FORK_REGISTRY/eve:${GITHUB_REF_NAME}${suffix}"
+            docker buildx imagetools create -t "$ref" "$ref-amd64" "$ref-arm64"
+            echo "$FORK_REGISTRY/eve@$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$ref" | jq -r .digest)" >> sign/images.txt
           done
-      - name: Sign release indexes
-        run: |
-          for plat in "" -nvidia-jp5 -nvidia-jp6 -nvidia-jp7; do
-            for hv in "" -kvm -k -mini; do
-              ref="$FORK_REGISTRY/eve:${GITHUB_REF_NAME}${plat}${hv}"
-              if docker buildx imagetools inspect --raw "$ref" > /dev/null 2>&1; then
-                ./tools/eve-cosign.sh sign "$ref"
-              fi
-            done
-          done
+          cat sign/images.txt
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: sign-images-indexes
+          path: sign
+
+  sign:
+    if: >-
+      github.event.repository.full_name == 'eriknordmark/eve' && !cancelled()
+      && needs.eve.result == 'success' && needs.indexes.result != 'failure'
+    needs: [eve, indexes]
+    permissions:
+      contents: read
+      id-token: write
+    uses: eriknordmark/eve/.github/workflows/release-sign.yml@sign-master
+    with:
+      blobs: ""
+    secrets:
+      registry-username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+      registry-password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
 
   trigger_assets:
     if: github.event.repository.full_name == 'eriknordmark/eve' && startsWith(github.ref, 'refs/tags/')
-    needs: [eve, sign-release]
+    needs: sign
     permissions:
       contents: write
       packages: read
