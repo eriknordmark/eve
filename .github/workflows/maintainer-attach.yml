@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 ---
 # FORK-ONLY: when a 9.9.* pre-release becomes a release, attach the
-# maintainer's image bundles (<hex>.maintainer.sigstore.json release assets)
-# to their images as OCI referrers, the way cosign stores its own, and check
-# that both the workflow and the maintainer signature verify.
+# maintainer's release approval (<tag>.maintainer.sigstore.json, one signed
+# in-toto statement listing every image digest and sha256sums file) to each
+# image as an OCI referrer, then check it the way a Docker Hub consumer
+# would: fetch the referrer back and verify that the statement is signed by
+# a maintainer and lists the image's digest.
 name: Maintainer attach
 on:  # yamllint disable-line rule:truthy
   release:
@@ -21,6 +23,9 @@ jobs:
     env:
       TAG: ${{ github.event.release.tag_name }}
       BUNDLE_TYPE: application/vnd.dev.sigstore.bundle.v0.3+json
+      APPROVAL: https://github.com/eriknordmark/eve/release-approval/v1
+      MAINTAINERS: erik@zededa.com
+      MAINTAINER_ISSUER: https://github.com/login/oauth
     steps:
       - uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4  # v2.0.2
         with:
@@ -41,18 +46,49 @@ jobs:
       - name: Attach and verify
         run: |
           set -euo pipefail
+          die() { echo "::error::$*"; exit 1; }
+          bundle="files/$TAG.maintainer.sigstore.json"
+          [ -f "$bundle" ] || die "no maintainer approval $bundle"
+          approved() {
+            local b=$1; shift
+            for m in $MAINTAINERS; do
+              cosign verify-blob-attestation --type "$APPROVAL" --certificate-identity "$m" \
+                --certificate-oidc-issuer "$MAINTAINER_ISSUER" --bundle "$b" "$@" > /dev/null 2>&1 && return
+            done
+            return 1
+          }
+          jq -r '.dsseEnvelope.payload' "$bundle" | base64 -d |
+            jq -e --arg t "$TAG" '.predicate.release == $t' > /dev/null || die "approval is not for $TAG"
+          for sums in files/*.sha256sums; do
+            approved "$bundle" "$sums" || die "$(basename "$sums") is not in the approval"
+            echo "approved: $(basename "$sums")"
+          done
           while read -r ref; do
-            b="files/${ref##*sha256:}.maintainer.sigstore.json"
-            [ -f "$b" ] || { echo "::error::no maintainer bundle for $ref"; exit 1; }
+            hex=${ref##*sha256:}
+            approved "$bundle" --digest "$hex" --digestAlg sha256 || die "$ref is not in the approval"
             oras attach --artifact-type "$BUNDLE_TYPE" \
               --annotation dev.sigstore.bundle.content=dsse-envelope \
-              --annotation dev.sigstore.bundle.predicateType=https://sigstore.dev/cosign/sign/v1 \
-              "$ref" "$b:$BUNDLE_TYPE"
-            cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-              --certificate-identity https://github.com/eriknordmark/eve/.github/workflows/release-sign.yml@refs/heads/sign-master \
-              --certificate-github-workflow-repository eriknordmark/eve "$ref" > /dev/null
-            echo "workflow signature verifies: $ref"
-            cosign verify --certificate-oidc-issuer https://github.com/login/oauth \
-              --certificate-identity-regexp '.*' "$ref" |
-              jq -r --arg r "$ref" '.[] | "maintainer signature verifies: \($r) \(.optional.Subject // "")"'
+              --annotation "dev.sigstore.bundle.predicateType=$APPROVAL" \
+              "$ref" "$bundle:$BUNDLE_TYPE"
+          done < files/images.txt
+          # What a Docker Hub consumer does: find the approval among the
+          # image's referrers and verify it against the image's digest.
+          while read -r ref; do
+            hex=${ref##*sha256:}
+            found=
+            for m in $(oras discover --format json --artifact-type "$BUNDLE_TYPE" "$ref" |
+                jq -r --arg p "$APPROVAL" '.. | objects
+                  | select(.annotations?["dev.sigstore.bundle.predicateType"]? == $p) | .digest'); do
+              layer=$(oras manifest fetch "${ref%@*}@$m" | jq -r '.layers[0].digest')
+              oras blob fetch --output fetched.json "${ref%@*}@$layer"
+              if approved fetched.json --digest "$hex" --digestAlg sha256; then found=$m; break; fi
+            done
+            [ -n "$found" ] || die "no maintainer approval among the referrers of $ref"
+            echo "approved from the registry: $ref (referrer $found)"
+            if cosign verify-attestation --type "$APPROVAL" --certificate-identity-regexp '.*' \
+                --certificate-oidc-issuer "$MAINTAINER_ISSUER" "$ref" > /dev/null 2> err.txt; then
+              echo "cosign verify-attestation also accepts it: $ref"
+            else
+              echo "::warning::cosign verify-attestation rejects it: $(tail -1 err.txt)"
+            fi
           done < files/images.txt
