@@ -134,3 +134,29 @@ jobs:
           { read -r image; read -r index; } < images/images.txt
           oras tag "$image" "$tag-amd64"
           oras tag "$index" "$tag"
+
+  # A pre-release carrying what a maintainer signs: the image list, the blob
+  # and the workflow's bundle for it.
+  release:
+    if: needs.build.outputs.mode == 'untagged'
+    needs: [build, tag]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: sign-*-signtest
+          path: files
+          merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: signed-blobs
+          path: files
+      - name: Create the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l files
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --prerelease \
+            --title "$GITHUB_REF_NAME" --notes "sign-test run $GITHUB_RUN_ID" files/*
