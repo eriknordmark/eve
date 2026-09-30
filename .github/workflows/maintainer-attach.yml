@@ -50,7 +50,7 @@ jobs:
           bundle="files/$TAG.maintainer.sigstore.json"
           [ -f "$bundle" ] || die "no maintainer approval $bundle"
           approved() {
-            local b=$1; shift
+            local b=$1 m; shift
             for m in $MAINTAINERS; do
               cosign verify-blob-attestation --type "$APPROVAL" --certificate-identity "$m" \
                 --certificate-oidc-issuer "$MAINTAINER_ISSUER" --bundle "$b" "$@" > /dev/null 2>&1 && return
