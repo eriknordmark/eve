@@ -1,0 +1,80 @@
+# Copyright (c) 2026, Zededa, Inc.
+# SPDX-License-Identifier: Apache-2.0
+---
+# FORK-ONLY: exercises release-sign.yml without an EVE build. It pushes a
+# small image and index to vars.DOCKERHUB_SIGN_NAMESPACE/eve-signtest and a
+# blob, then hands them to release-sign.yml at the ref named in
+# .github/sign-test-signer (default sign-master).
+name: Sign test
+on:  # yamllint disable-line rule:truthy
+  push:
+    tags:
+      - "9.9.*"
+
+permissions: {}
+
+jobs:
+  build:
+    if: github.repository == 'eriknordmark/eve'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      signer: ${{ steps.signer.outputs.signer }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+      - id: signer
+        run: echo "signer=$(cat .github/sign-test-signer 2> /dev/null || echo sign-master)" >> "$GITHUB_OUTPUT"
+      - name: Login to Docker Hub
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+      - name: Push image, index and blob
+        env:
+          REPO: docker.io/${{ vars.DOCKERHUB_SIGN_NAMESPACE }}/eve-signtest
+        run: |
+          set -euo pipefail
+          mkdir -p ctx out/images out/blobs
+          printf '%s %s %s\n' "$GITHUB_REF" "$GITHUB_SHA" "$GITHUB_RUN_ID" > ctx/stamp
+          printf 'FROM scratch\nCOPY stamp /stamp\n' > ctx/Dockerfile
+          tag="$REPO:${GITHUB_REF_NAME}-${GITHUB_RUN_ID}"
+          docker buildx build --provenance=false --sbom=false --push \
+            --metadata-file meta.json -t "$tag-amd64" ctx
+          img="$REPO@$(jq -r '."containerimage.digest"' meta.json)"
+          docker buildx imagetools create -t "$tag" "$img"
+          idx="$REPO@$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$tag" | jq -r .digest)"
+          printf '%s\n%s\n' "$img" "$idx" | tee out/images/images.txt
+          cp ctx/stamp out/blobs/signtest.sha256sums
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: sign-images-signtest
+          path: out/images
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: sign-blobs-signtest
+          path: out/blobs
+
+  sign-master:
+    if: needs.build.outputs.signer == 'sign-master'
+    needs: build
+    permissions:
+      contents: read
+      id-token: write
+    uses: eriknordmark/eve/.github/workflows/release-sign.yml@sign-master
+    secrets:
+      registry-username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+      registry-password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+
+  sign-other:
+    if: needs.build.outputs.signer == 'sign-other'
+    needs: build
+    permissions:
+      contents: read
+      id-token: write
+    uses: eriknordmark/eve/.github/workflows/release-sign.yml@sign-other
+    secrets:
+      registry-username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+      registry-password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
