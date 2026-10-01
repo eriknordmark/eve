@@ -26,7 +26,7 @@ permissions:
 
 env:
   # The packages pulled from lfedge carry the backfill's signatures.
-  EVE_COSIGN_IDENTITY_REGEXP: '^https://github\.com/eriknordmark/eve/\.github/workflows/(release-sign\.yml@refs/heads/sign-master|sign-backfill\.yml@refs/heads/cosign-signing|publish\.yml@refs/(heads/[0-9]+\.[0-9]+|tags/[0-9]+\.[0-9]+\.[0-9]+(-lts|-rc[0-9]+)?))$'
+  EVE_COSIGN_IDENTITY_REGEXP: '^https://github\.com/eriknordmark/eve/\.github/workflows/(release-sign\.yml@refs/heads/sign-master|sign-backfill\.yml@refs/heads/cosign-signing|publish\.yml@refs/heads/[0-9]+\.[0-9]+)$'
   EVE_COSIGN_REPOSITORY: eriknordmark/eve
   EVE_COSIGN_ENFORCE: ${{ vars.EVE_COSIGN_ENFORCE }}
   EVE_SIG_PREFIX: docker.io/${{ vars.DOCKERHUB_SIGN_NAMESPACE }}
@@ -296,10 +296,12 @@ jobs:
 
   # Upstream's manifest job, for the fork's package: merge the per-arch
   # pushes into the package and release indexes and sign the package index.
-  # The eve jobs push the release tag without overwriting it, so the first
-  # arch to push it sets it; this job must repair it. Both indexes then list
-  # the same manifests, so the release index must be the same digest, and
-  # each of its manifests must carry the signature its build made.
+  # linuxkit never overwrites a release tag, and the first job to push one
+  # pushes the arches in its index: all of them for a package the registry
+  # already served, only its own for a package built in this run. A tag
+  # build reuses packages, so its release index must be the package index,
+  # and each manifest it lists must carry the signature of the branch build
+  # that pushed it.
   manifest:
     if: github.event.repository.full_name == 'eriknordmark/eve'
     needs: eve
@@ -337,8 +339,9 @@ jobs:
           ref=docker.io/$("$lk" pkg show-tag --org "$ns" pkg/mkconf)
           ./tools/eve-cosign.sh sign "$ref"
           a=$(./tools/eve-cosign.sh verify-ref "$ref")
-          b=$(./tools/eve-cosign.sh verify-ref "$FORK_REGISTRY/eve-mkconf:$REL")
           echo "$ref: $a"
+          [[ "$GITHUB_REF" == refs/tags/* ]] || exit 0
+          b=$(./tools/eve-cosign.sh verify-ref "$FORK_REGISTRY/eve-mkconf:$REL")
           echo "$REL: $b"
           for d in $(docker buildx imagetools inspect --raw "$FORK_REGISTRY/eve-mkconf:$REL" | jq -r '.manifests[]
             | select(.annotations["vnd.docker.reference.type"] != "attestation-manifest") | .digest'); do
