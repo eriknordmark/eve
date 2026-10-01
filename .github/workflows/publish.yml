@@ -214,6 +214,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           . "$RUNNER_TEMP/push"
+          build-tools/bin/linuxkit pkg build --force --platforms "linux/$ARCH" pkg/mkconf
           ref=$(build-tools/bin/linuxkit pkg show-tag pkg/mkconf)
           d=$(push "$FORK_REGISTRY/eve-mkconf" "$ref-$ARCH")
           want "$FORK_REGISTRY/eve-mkconf@$d" "${ref##*:}-rehearsal-${GITHUB_REF_NAME}-${ARCH}"
