@@ -4,11 +4,13 @@
 # FORK-ONLY rehearsal of the signed publish flow on eriknordmark/eve.
 # Packages are pulled from docker.io/lfedge; their signatures live in the
 # Docker Hub namespace vars.DOCKERHUB_SIGN_NAMESPACE (see sign-backfill.yml).
-# EVE, eve-sources and one package rebuilt here are pushed there by digest.
-# The build jobs hold no signing identity: they upload the pushed digests and
-# the release files (to a draft release), release-sign.yml, called at the
-# sign-master stand-in for master, signs all of them behind one approval, and
-# only then are the digests tagged and the release published.
+# One package rebuilt here is pushed there by linuxkit, as upstream pushes
+# every package it builds, and signed by this workflow on branch and tag
+# builds alike, with no approval. EVE and eve-sources are pushed there by
+# digest on tags only: the build jobs upload the pushed digests and the
+# release files (to a draft release), release-sign.yml, called at the
+# sign-master stand-in for master, signs them behind one approval, and only
+# then are the digests tagged and the release published.
 name: Publish
 on:  # yamllint disable-line rule:truthy
   push:
@@ -24,7 +26,7 @@ permissions:
 
 env:
   # The packages pulled from lfedge carry the backfill's signatures.
-  EVE_COSIGN_IDENTITY_REGEXP: '^https://github\.com/eriknordmark/eve/\.github/workflows/(release-sign\.yml@refs/heads/sign-master|sign-backfill\.yml@refs/heads/cosign-signing)$'
+  EVE_COSIGN_IDENTITY_REGEXP: '^https://github\.com/eriknordmark/eve/\.github/workflows/(release-sign\.yml@refs/heads/sign-master|sign-backfill\.yml@refs/heads/cosign-signing|publish\.yml@refs/(heads/[0-9]+\.[0-9]+|tags/[0-9]+\.[0-9]+\.[0-9]+(-lts|-rc[0-9]+)?))$'
   EVE_COSIGN_REPOSITORY: eriknordmark/eve
   EVE_COSIGN_ENFORCE: ${{ vars.EVE_COSIGN_ENFORCE }}
   EVE_SIG_PREFIX: docker.io/${{ vars.DOCKERHUB_SIGN_NAMESPACE }}
@@ -102,6 +104,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -221,17 +224,32 @@ jobs:
           }
           want() { echo "$1" >> sign/images.txt; echo "$1 $2" >> sign/tags.txt; }
           EOF
-      # Upstream pushes each package it builds to lfedge; the fork rehearses
-      # that with one package pushed to its own namespace.
-      - name: Push a package built here
+      # Upstream's LINUXKIT_PKG_TARGET=push, for one package into the fork's
+      # namespace: build what the registry does not serve, push it with the
+      # release tag, and sign what was built. A package the registry already
+      # serves only gets the release tag, on the digest signed by the build
+      # that pushed it.
+      - name: Push and sign a package
         env:
           ARCH: ${{ matrix.arch }}
+          MAKE_VARS: "HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }}"
         run: |
-          . "$RUNNER_TEMP/push"
-          build-tools/bin/linuxkit pkg build --force --platforms "linux/$ARCH" pkg/mkconf
-          ref=$(build-tools/bin/linuxkit pkg show-tag pkg/mkconf)
-          d=$(push "$FORK_REGISTRY/eve-mkconf" "$ref-$ARCH")
-          want "$FORK_REGISTRY/eve-mkconf@$d" "${ref##*:}-rehearsal-${GITHUB_REF_NAME}-${ARCH}"
+          lk=build-tools/bin/linuxkit
+          ns=${FORK_REGISTRY#docker.io/}
+          # shellcheck disable=SC2086
+          REL=$(make -s $MAKE_VARS LINUXKIT_PKG_TARGET=push eve_rel_info | tail -1)
+          [ -n "$REL" ] || { echo "::error::no release name"; exit 1; }
+          "$lk" pkg build --org "$ns" --platforms "linux/$ARCH" pkg/mkconf
+          EVE_PKG_PREFIX=$FORK_REGISTRY ./tools/eve-cosign.sh classify "$RUNNER_TEMP/fork-pkgs"
+          "$lk" pkg push --org "$ns" --platforms "linux/$ARCH" --release "$REL" pkg/mkconf
+          ./tools/eve-cosign.sh sign-pkgs "$RUNNER_TEMP/fork-pkgs/built"
+          for t in "$($lk pkg show-tag --org "$ns" pkg/mkconf)" "$ns/eve-mkconf:$REL"; do
+            d=$(docker buildx imagetools inspect --raw "docker.io/$t" | jq -r --arg a "$ARCH" '.manifests[]
+              | select(.platform.architecture == $a and .platform.os == "linux") | .digest')
+            [[ "$d" == sha256:* ]] || { echo "::error::no linux/$ARCH manifest in $t"; exit 1; }
+            echo "$t linux/$ARCH: $d"
+            ./tools/eve-cosign.sh verify-ref "$FORK_REGISTRY/eve-mkconf@$d"
+          done
       - name: Collect SBOM and sources
         uses: ./.github/actions/run-make
         with:
@@ -281,6 +299,52 @@ jobs:
         run: |
           df -h /
           docker system df
+
+  # Upstream's manifest job, for the fork's package: merge the per-arch
+  # pushes into the package and release indexes and sign the package index.
+  # Both indexes list the same manifests, so the release index must be the
+  # same digest.
+  manifest:
+    if: github.event.repository.full_name == 'eriknordmark/eve'
+    needs: eve
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Force fetch annotated tags (workaround)
+        run: |
+          git fetch --force --tags
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: Build linuxkit
+        run: |
+          make linuxkit
+      - name: Login to Docker Hub
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+      - name: Update and sign the package index
+        run: |
+          lk=build-tools/bin/linuxkit
+          ns=${FORK_REGISTRY#docker.io/}
+          REL=$(make -s LINUXKIT_PKG_TARGET=push eve_rel_info | tail -1)
+          [ -n "$REL" ] || { echo "::error::no release name"; exit 1; }
+          "$lk" pkg manifest --org "$ns" --release "$REL" pkg/mkconf
+          ref=docker.io/$("$lk" pkg show-tag --org "$ns" pkg/mkconf)
+          ./tools/eve-cosign.sh sign "$ref"
+          a=$(./tools/eve-cosign.sh verify-ref "$ref")
+          b=$(./tools/eve-cosign.sh verify-ref "$FORK_REGISTRY/eve-mkconf:$REL")
+          echo "$ref: $a"
+          echo "$REL: $b"
+          [ "${a#*@}" = "${b#*@}" ] || { echo "::error::the $REL index differs from the package index"; exit 1; }
 
   # Upstream, linuxkit merges the per-arch pushes into this index; the fork
   # merges the per-arch descriptors from the linuxkit cache and pushes the
@@ -341,8 +405,8 @@ jobs:
   # approval of the release environment.
   sign:
     if: >-
-      github.event.repository.full_name == 'eriknordmark/eve' && !cancelled()
-      && needs.eve.result == 'success' && needs.indexes.result != 'failure'
+      github.event.repository.full_name == 'eriknordmark/eve' && startsWith(github.ref, 'refs/tags/')
+      && !cancelled() && needs.eve.result == 'success' && needs.indexes.result != 'failure'
       && needs.trigger_assets.result != 'failure'
     needs: [eve, indexes, trigger_assets]
     permissions:
@@ -350,7 +414,7 @@ jobs:
       id-token: write
     uses: eriknordmark/eve/.github/workflows/release-sign.yml@sign-master
     with:
-      blobs: ${{ startsWith(github.ref, 'refs/tags/') && 'sign-blobs-*' || '' }}
+      blobs: sign-blobs-*
     secrets:
       registry-username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
       registry-password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
