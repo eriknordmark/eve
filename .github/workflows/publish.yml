@@ -307,11 +307,14 @@ jobs:
           merge-multiple: true
       - name: Create the release index
         run: |
+          set -o pipefail
           mkdir sign
-          find eve -name 'descriptors-eve-*.json' ! -name 'descriptors-eve-sources-*' | sort | xargs jq -s \
+          # descriptors-eve-<arch>.json; other repos' files carry their name.
+          find eve -regex '.*/descriptors-eve-[a-z0-9]*\.json' | sort | xargs jq -s \
             '{schemaVersion: 2, mediaType: "application/vnd.oci.image.index.v1+json", manifests: add}' > index.json
           jq -c '.manifests[] | {digest, platform, annotations}' index.json
           d=$(oras manifest push --descriptor "$FORK_REGISTRY/eve" index.json | jq -r .digest)
+          [[ "$d" == sha256:* ]] || { echo "::error::pushing the release index failed"; exit 1; }
           echo "$FORK_REGISTRY/eve@$d" > sign/images.txt
           printf '%s %s\n' "$FORK_REGISTRY/eve@$d" "$GITHUB_REF_NAME" "$FORK_REGISTRY/eve@$d" "$GITHUB_REF_NAME-kvm" \
             > sign/tags.txt
