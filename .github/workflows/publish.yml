@@ -183,6 +183,18 @@ jobs:
           : > sign/tags.txt
           cat > "$RUNNER_TEMP/push" << 'EOF'
           cache=$HOME/.linuxkit/cache
+          copy() {  # copy <digest> <repo>; fails unless every blob landed
+            local log m b
+            log=$(mktemp)
+            oras cp --debug --from-oci-layout "$cache@$1" "$2" 2> "$log" >&2 || { tail -20 "$log" >&2; return 1; }
+            grep -E '(Request URL|Response Status):' "$log" | sed 's/?.*"/"/' >&2
+            m=$(oras manifest fetch "$2@$1")
+            for b in $(jq -r '.config.digest, .layers[].digest' <<< "$m"); do
+              ls -l "$cache/blobs/sha256/${b#sha256:}" >&2 || true
+              oras blob fetch --descriptor "$2@$b" > /dev/null ||
+                { echo "::error::$2@$b is missing after copying $1" >&2; return 1; }
+            done
+          }
           push() {
             local d raw plat att
             d=$(jq -r --arg r "docker.io/$2" '.manifests[]
@@ -194,7 +206,7 @@ jobs:
               plat=$(jq -r --arg a "$ARCH" '.manifests[] | select(.platform.architecture == $a) | .digest' <<< "$raw")
               for att in $(jq -r '.manifests[]
                   | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest") | .digest' <<< "$raw"); do
-                oras cp --from-oci-layout "$cache@$att" "$1" >&2
+                copy "$att" "$1"
               done
               # The per-arch descriptors, for the multi-arch index.
               jq '.manifests' <<< "$raw" > "sign/descriptors-${1##*/}-$ARCH.json"
@@ -202,7 +214,7 @@ jobs:
             *) plat=$d ;;
             esac
             [ -n "$plat" ] || { echo "::error::no linux/$ARCH manifest in $2" >&2; return 1; }
-            oras cp --from-oci-layout "$cache@$plat" "$1" >&2
+            copy "$plat" "$1"
             echo "$plat"
           }
           want() { echo "$1" >> sign/images.txt; echo "$1 $2" >> sign/tags.txt; }
