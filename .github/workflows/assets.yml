@@ -17,13 +17,15 @@ on:  # yamllint disable-line rule:truthy
         required: false
       DOCKERHUB_SIGN_TOKEN:
         required: false
+    outputs:
+      release_id:
+        description: the draft release the files were uploaded to
+        value: ${{ jobs.create_release.outputs.release_id }}
+      upload_url:
+        description: its asset upload URL
+        value: ${{ jobs.create_release.outputs.upload_url }}
 
 permissions: {}
-
-# Signature policy for tools/eve-cosign.sh; see docs/SIGNING.md.
-env:
-  EVE_COSIGN_IDENTITY_REGEXP: '^https://github\.com/eriknordmark/eve/\.github/workflows/release-sign\.yml@refs/heads/sign-master$'
-  EVE_COSIGN_REPOSITORY: eriknordmark/eve
 
 jobs:
   create_release:
@@ -42,7 +44,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           payload=$(jq -n --arg tag "$TAG_REF" \
-            '{tag_name: $tag, name: $tag, draft: false, prerelease: true}')
+            '{tag_name: $tag, name: $tag, draft: true, prerelease: true}')
           response=$(curl -s --show-error -X POST \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Content-Type: application/json" \
@@ -107,16 +109,21 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
           password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+      # The digests the eve job pushed; they are signed and tagged only after
+      # this job, together with the files it builds.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        if: github.event.repository.full_name == 'eriknordmark/eve'
         with:
-          cosign-release: v3.1.3
+          name: sign-images-eve-${{ matrix.arch }}-${{ matrix.hv }}-${{ matrix.platform }}
+          path: pushed
       - name: Pull the EVE release from DockerHUB or build it
         run: |
           HV=${{ matrix.hv }}
           if [ "${{ github.event.repository.full_name }}" = "eriknordmark/eve" ]; then
-             EVE=$(./tools/eve-cosign.sh verify-ref "docker.io/${{ vars.DOCKERHUB_SIGN_NAMESPACE }}/eve:${TAG}-${{ env.PLATFORMVER }}${HV}-${{ env.ARCH }}")
+             # shellcheck disable=SC1090
+             . "pushed/release-${{ env.ARCH }}-${HV}-${{ matrix.platform }}.env"
              docker pull "$EVE"
+             echo "EVE_SOURCES=$EVE_SOURCES" >> "$GITHUB_ENV"
           else
              make pkgs
              make HV=${HV} ZARCH=${{ env.ARCH }} PLATFORM=${{ matrix.platform }} eve
@@ -166,10 +173,7 @@ jobs:
       - name: Export eve-sources to assets/collected_sources.tar
         run: |
           HV=${{ matrix.hv }}
-          EVE_SOURCES=lfedge/eve-sources:${TAG}-${{ env.PLATFORMVER }}${HV}-${{ env.ARCH }}
-          if [ "${{ github.event.repository.full_name }}" = "eriknordmark/eve" ]; then
-             EVE_SOURCES=$(./tools/eve-cosign.sh verify-ref "docker.io/${{ vars.DOCKERHUB_SIGN_NAMESPACE }}/${EVE_SOURCES#lfedge/}")
-          fi
+          EVE_SOURCES=${EVE_SOURCES:-lfedge/eve-sources:${TAG}-${{ env.PLATFORMVER }}${HV}-${{ env.ARCH }}}
           docker pull "$EVE_SOURCES"
           # The signed sha256sums then also binds the image digests the
           # assets came from.
@@ -246,48 +250,3 @@ jobs:
           docker system df
           sudo du -xsh /var/lib/docker/containers /var/lib/docker || true
           ls -la assets || true
-
-  sign:
-    needs: build
-    permissions:
-      contents: read
-      id-token: write
-    uses: eriknordmark/eve/.github/workflows/release-sign.yml@sign-master
-    with:
-      images: ""
-      blobs: sign-blobs-assets-*
-      bundles: signed-assets
-    secrets:
-      registry-username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
-      registry-password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
-
-  upload_bundles:
-    runs-on: ubuntu-24.04
-    needs: [create_release, sign]
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: signed-assets
-          path: bundles
-      - name: Upload the bundles to the release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          UPLOAD_URL: ${{ needs.create_release.outputs.upload_url }}
-        run: |
-          upload_failed=0
-          for file in bundles/*.sigstore.json; do
-            name=$(basename "$file")
-            if response=$(curl -s --show-error -X POST \
-                 -H "Authorization: Bearer $GITHUB_TOKEN" \
-                 -H "Content-Type: application/octet-stream" \
-                 -T "$file" "$UPLOAD_URL?name=$name") \
-               && echo "$response" | jq -e .id > /dev/null; then
-              echo "$name uploaded"
-            else
-              echo "::error::Failed to upload $name: $response"
-              upload_failed=1
-            fi
-          done
-          exit "$upload_failed"
