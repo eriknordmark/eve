@@ -243,13 +243,7 @@ jobs:
           EVE_PKG_PREFIX=$FORK_REGISTRY ./tools/eve-cosign.sh classify "$RUNNER_TEMP/fork-pkgs"
           "$lk" pkg push --org "$ns" --platforms "linux/$ARCH" --release "$REL" pkg/mkconf
           ./tools/eve-cosign.sh sign-pkgs "$RUNNER_TEMP/fork-pkgs/built"
-          for t in "$($lk pkg show-tag --org "$ns" pkg/mkconf)" "$ns/eve-mkconf:$REL"; do
-            d=$(docker buildx imagetools inspect --raw "docker.io/$t" | jq -r --arg a "$ARCH" '.manifests[]
-              | select(.platform.architecture == $a and .platform.os == "linux") | .digest')
-            [[ "$d" == sha256:* ]] || { echo "::error::no linux/$ARCH manifest in $t"; exit 1; }
-            echo "$t linux/$ARCH: $d"
-            ./tools/eve-cosign.sh verify-ref "$FORK_REGISTRY/eve-mkconf@$d"
-          done
+          ./tools/eve-cosign.sh verify-ref "docker.io/$($lk pkg show-tag --org "$ns" pkg/mkconf)-$ARCH"
       - name: Collect SBOM and sources
         uses: ./.github/actions/run-make
         with:
@@ -302,8 +296,10 @@ jobs:
 
   # Upstream's manifest job, for the fork's package: merge the per-arch
   # pushes into the package and release indexes and sign the package index.
-  # Both indexes list the same manifests, so the release index must be the
-  # same digest.
+  # The eve jobs push the release tag without overwriting it, so the first
+  # arch to push it sets it; this job must repair it. Both indexes then list
+  # the same manifests, so the release index must be the same digest, and
+  # each of its manifests must carry the signature its build made.
   manifest:
     if: github.event.repository.full_name == 'eriknordmark/eve'
     needs: eve
@@ -344,6 +340,10 @@ jobs:
           b=$(./tools/eve-cosign.sh verify-ref "$FORK_REGISTRY/eve-mkconf:$REL")
           echo "$ref: $a"
           echo "$REL: $b"
+          for d in $(docker buildx imagetools inspect --raw "$FORK_REGISTRY/eve-mkconf:$REL" | jq -r '.manifests[]
+            | select(.annotations["vnd.docker.reference.type"] != "attestation-manifest") | .digest'); do
+            ./tools/eve-cosign.sh verify-ref "$FORK_REGISTRY/eve-mkconf@$d"
+          done
           [ "${a#*@}" = "${b#*@}" ] || { echo "::error::the $REL index differs from the package index"; exit 1; }
 
   # Upstream, linuxkit merges the per-arch pushes into this index; the fork
