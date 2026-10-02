@@ -1,12 +1,12 @@
 # Copyright (c) 2026, Zededa, Inc.
 # SPDX-License-Identifier: Apache-2.0
 ---
-# The only workflow that signs. Callers name it by full path at the
-# protected signing branch,
+# Signs a release. The caller names it by full path at master,
 #   uses: eriknordmark/eve/.github/workflows/release-sign.yml@sign-master
+# FORK ONLY: sign-master stands in for master.
 # so that every certificate identity names this file at that ref, whatever
-# called it; the caller's ref and commit are in the certificate's Source
-# Repository Ref and Digest.
+# called it; the release tag and its commit are in the certificate's Source
+# Repository Ref and Digest. docs/SIGNING.md describes the policy.
 #
 # The caller uploads what to sign as run artifacts, selected by the images
 # and blobs name patterns (empty for none):
@@ -16,9 +16,6 @@
 #   blobs   files to sign with cosign sign-blob
 # The blob bundles, <file>.sigstore.json, are uploaded as the artifact named
 # by the bundles input.
-#
-# FORK-ONLY: sign-master stands in for master, and sign-test.yml is an
-# accepted caller.
 name: Release sign
 on:  # yamllint disable-line rule:truthy
   workflow_call:
@@ -49,8 +46,9 @@ env:
   ISSUER: https://token.actions.githubusercontent.com
 
 jobs:
-  # Runs before the environment gate, so an unacceptable ref fails without
-  # asking the reviewers.
+  # Runs before the environment gate, so an unacceptable caller fails without
+  # asking the reviewers. The check's code comes from master, so a tagger
+  # cannot remove it.
   check:
     runs-on: ubuntu-24.04
     permissions:
@@ -63,23 +61,12 @@ jobs:
         run: |
           die() { echo "::error::$*"; exit 1; }
           [ "$GITHUB_REPOSITORY" = "$REPOSITORY" ] || die "called from $GITHUB_REPOSITORY"
-          [[ "$CALLER" =~ ^"$REPOSITORY/.github/workflows/"(publish|assets|sign-test)\.yml@"$GITHUB_REF"$ ]] ||
+          [[ "$CALLER" == "$REPOSITORY/.github/workflows/publish.yml@$GITHUB_REF" ]] ||
             die "caller $CALLER may not sign"
-          case "$GITHUB_REF" in
-          refs/tags/*)
-            tag=${GITHUB_REF#refs/tags/}
-            [[ "$tag" =~ ^([0-9]+\.[0-9]+)\.[0-9]+(-lts|-rc[0-9]+)?$ ]] || die "$tag is not a release tag"
-            branches="${BASH_REMATCH[1]} ${BASH_REMATCH[1]}-stable"
-            ;;
-          refs/heads/*)
-            branch=${GITHUB_REF#refs/heads/}
-            [[ "$branch" =~ ^(master|[0-9]+\.[0-9]+(-stable)?)$ ]] || die "branch $branch may not sign"
-            branches=$branch
-            ;;
-          *)
-            die "$GITHUB_REF may not sign"
-            ;;
-          esac
+          tag=${GITHUB_REF#refs/tags/}
+          [[ "$GITHUB_REF" == refs/tags/* && "$tag" =~ ^([0-9]+\.[0-9]+)\.[0-9]+(-lts|-rc[0-9]+)?$ ]] ||
+            die "$GITHUB_REF is not a release tag"
+          branches="${BASH_REMATCH[1]} ${BASH_REMATCH[1]}-stable"
           # The compare API reports the head as "behind" (or "identical")
           # when it is an ancestor of the base.
           for b in $branches; do
@@ -96,7 +83,7 @@ jobs:
   sign:
     needs: check
     runs-on: ubuntu-24.04
-    environment: ${{ startsWith(github.ref, 'refs/tags/') && 'release' || 'packages' }}
+    environment: release
     permissions:
       contents: read
       id-token: write
