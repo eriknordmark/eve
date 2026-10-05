@@ -1,5 +1,5 @@
 image: eve-apparmor
-org: lfedge
+org: eriknordmark
 config:
   binds:
     - /sys:/sys

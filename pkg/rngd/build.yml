@@ -1,5 +1,5 @@
 image: eve-rngd
-org: lfedge
+org: eriknordmark
 config:
   capabilities:
     - CAP_SYS_ADMIN

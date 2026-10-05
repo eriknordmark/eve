@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # hadolint ignore=DL3029
-FROM --platform=$BUILDPLATFORM lfedge/eve-alpine:ef20bcb617db5545765f4d7486621cf606e5595e AS build
+FROM --platform=$BUILDPLATFORM eriknordmark/eve-alpine:ef20bcb617db5545765f4d7486621cf606e5595e AS build
 ARG TARGETARCH
 
 # build the tpm-recovery tool

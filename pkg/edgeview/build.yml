@@ -1,5 +1,5 @@
 image: eve-edgeview
-org: lfedge
+org: eriknordmark
 config:
   # The reason for not specifying a non-zero uid/gid is that the edgeview container
   # needs to add entries to /etc/hosts, and it needs to read in various files such

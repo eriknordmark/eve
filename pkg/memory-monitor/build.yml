@@ -1,5 +1,5 @@
 image: eve-memory-monitor
-org: lfedge
+org: eriknordmark
 config:
   binds:
     - /persist:/persist # for the working directory and output directory

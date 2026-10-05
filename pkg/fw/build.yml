@@ -1,5 +1,5 @@
 image: eve-fw
-org: lfedge
+org: eriknordmark
 tag: "{{.Hash}}-generic"
 buildArgs:
   - PLATFORM=generic

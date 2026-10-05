@@ -1,6 +1,6 @@
 ---
 image: eve-vtpm
-org: lfedge
+org: eriknordmark
 config:
   # these ids must match the corresponding container specific user/group
   # created in pkg/dom0-ztools

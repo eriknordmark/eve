@@ -5,7 +5,7 @@
 #
 ---
 image: eve-fw
-org: lfedge
+org: eriknordmark
 tag: "{{.Hash}}-nvidia-jp6"
 buildArgs:
   - PLATFORM=nvidia-jp6

@@ -202,8 +202,8 @@ func filterPkg(deps []string) []string {
 	var depList []string
 	dpList := make(map[string]bool)
 
-	reLF := regexp.MustCompile("lfedge/.*")
-	rePkg := regexp.MustCompile("lfedge/(?:eve-)?(.*):.*")
+	reLF := regexp.MustCompile("(?:lfedge|eriknordmark)/.*")
+	rePkg := regexp.MustCompile("(?:lfedge|eriknordmark)/(?:eve-)?(.*):.*")
 	for _, s := range deps {
 		// We are just interested on packages from lfegde (those that we
 		// published)
