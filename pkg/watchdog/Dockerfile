@@ -1,7 +1,7 @@
 # Copyright (c) 2023 Zededa, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM eriknordmark/eve-alpine:ef20bcb617db5545765f4d7486621cf606e5595e AS watchdog-build
+FROM eriknordmark/eve-alpine:4d19012d2cb16c8c1c7e5ad178f9abfc4f725050 AS watchdog-build
 ENV BUILD_PKGS build-base file libtirpc-dev linux-headers tar util-linux
 ENV PKGS alpine-baselayout musl-utils libsmartcols
 RUN eve-alpine-deploy.sh

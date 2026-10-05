@@ -1,4 +1,4 @@
-FROM eriknordmark/eve-alpine:ef20bcb617db5545765f4d7486621cf606e5595e AS build
+FROM eriknordmark/eve-alpine:4d19012d2cb16c8c1c7e5ad178f9abfc4f725050 AS build
 
 ENV BUILD_PKGS="patch make gcc perl util-linux-dev git mtools linux-headers musl-dev xz-dev"
 RUN eve-alpine-deploy.sh

@@ -12,3 +12,4 @@ config:
   devices:
     - path: all
       type: a
+# package tag bump for signing

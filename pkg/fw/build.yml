@@ -3,3 +3,4 @@ org: eriknordmark
 tag: "{{.Hash}}-generic"
 buildArgs:
   - PLATFORM=generic
+# package tag bump for signing

@@ -4,3 +4,4 @@ image: eve-storage-resizer
 org: eriknordmark
 # Fully vendored; no network needed at build time.
 network: no
+# package tag bump for signing

@@ -7,3 +7,4 @@ config:
   readonly: true
   net: new
   ipc: new
+# package tag bump for signing
