@@ -1,10 +1,9 @@
 # Copyright (c) 2025, Zededa, Inc.
 # SPDX-License-Identifier: Apache-2.0
 ---
-# FORK ONLY: the upstream flow on eriknordmark/eve, with packages pulled
-# from lfedge and every push and signature in the Docker Hub namespace
-# vars.DOCKERHUB_SIGN_NAMESPACE. One package, tools/rehearsal-pkg, stands in
-# for the packages a branch build pushes and signs.
+# FORK ONLY: the upstream flow on eriknordmark/eve, with every package
+# except eve, sources and alpine-base built, pushed and signed under the
+# Docker Hub namespace vars.DOCKERHUB_SIGN_NAMESPACE.
 name: Publish
 on:  # yamllint disable-line rule:truthy
   push:
@@ -38,6 +37,7 @@ env:
   EVE_COSIGN_ENFORCE: ${{ vars.EVE_COSIGN_ENFORCE }}
   EVE_SIG_PREFIX: docker.io/${{ vars.DOCKERHUB_SIGN_NAMESPACE }}
   FORK_REGISTRY: docker.io/${{ vars.DOCKERHUB_SIGN_NAMESPACE }}
+  EVE_PKG_PREFIX: docker.io/${{ vars.DOCKERHUB_SIGN_NAMESPACE }}
 
 jobs:
   # ════════════════════════════════════════════════════════════════════════
@@ -101,17 +101,21 @@ jobs:
       - name: Verify package inputs
         run: |
           ./tools/eve-cosign.sh check-inputs "$RUNNER_TEMP/pkgs" amd64
-      - name: Push and sign the stand-in package
-        env:
-          ARCH: amd64
+      - name: Push packages
         run: |
-          [ ! -s "$RUNNER_TEMP/pkgs/built" ] || { echo "::error::the fork cannot push lfedge packages"; cat "$RUNNER_TEMP/pkgs/built"; exit 1; }
-          lk=build-tools/bin/linuxkit
-          "$lk" pkg build --platforms "linux/$ARCH" tools/rehearsal-pkg
-          EVE_PKG_PREFIX=$FORK_REGISTRY ./tools/eve-cosign.sh check-inputs "$RUNNER_TEMP/fork-pkgs" "$ARCH"
-          "$lk" pkg push --platforms "linux/$ARCH" tools/rehearsal-pkg
-          EVE_PKG_PREFIX=$FORK_REGISTRY ./tools/eve-cosign.sh sign-built "$RUNNER_TEMP/fork-pkgs"
-          mkdir -p pkg-tags && cp "$RUNNER_TEMP/fork-pkgs/built-tags" pkg-tags/pkgs-amd64
+          SUCCESS=
+          for i in 1 2 3; do
+            echo "Run attempt: $i"
+            if make -e V=1 HV=kvm ZARCH=amd64 PLATFORM=generic LINUXKIT_PKG_TARGET=push PRUNE=1 pkgs; then
+              SUCCESS=true
+              break
+            fi
+          done
+          if [ -z "$SUCCESS" ]; then echo "::error::failed to push packages" && exit 1; fi
+      - name: Sign packages built here
+        run: |
+          ./tools/eve-cosign.sh sign-built "$RUNNER_TEMP/pkgs"
+          mkdir -p pkg-tags && cp "$RUNNER_TEMP/pkgs/built-tags" pkg-tags/pkgs-amd64
       - name: Hand the built package tags to the manifest job
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
@@ -188,17 +192,21 @@ jobs:
       - name: Verify package inputs
         run: |
           ./tools/eve-cosign.sh check-inputs "$RUNNER_TEMP/pkgs" arm64
-      - name: Push and sign the stand-in package
-        env:
-          ARCH: arm64
+      - name: Push packages
         run: |
-          [ ! -s "$RUNNER_TEMP/pkgs/built" ] || { echo "::error::the fork cannot push lfedge packages"; cat "$RUNNER_TEMP/pkgs/built"; exit 1; }
-          lk=build-tools/bin/linuxkit
-          "$lk" pkg build --platforms "linux/$ARCH" tools/rehearsal-pkg
-          EVE_PKG_PREFIX=$FORK_REGISTRY ./tools/eve-cosign.sh check-inputs "$RUNNER_TEMP/fork-pkgs" "$ARCH"
-          "$lk" pkg push --platforms "linux/$ARCH" tools/rehearsal-pkg
-          EVE_PKG_PREFIX=$FORK_REGISTRY ./tools/eve-cosign.sh sign-built "$RUNNER_TEMP/fork-pkgs"
-          mkdir -p pkg-tags && cp "$RUNNER_TEMP/fork-pkgs/built-tags" pkg-tags/pkgs-arm64
+          SUCCESS=
+          for i in 1 2 3; do
+            echo "Run attempt: $i"
+            if make -e V=1 HV=kvm ZARCH=arm64 PLATFORM=generic LINUXKIT_PKG_TARGET=push PRUNE=1 pkgs; then
+              SUCCESS=true
+              break
+            fi
+          done
+          if [ -z "$SUCCESS" ]; then echo "::error::failed to push packages" && exit 1; fi
+      - name: Sign packages built here
+        run: |
+          ./tools/eve-cosign.sh sign-built "$RUNNER_TEMP/pkgs"
+          mkdir -p pkg-tags && cp "$RUNNER_TEMP/pkgs/built-tags" pkg-tags/pkgs-arm64
       - name: Hand the built package tags to the manifest job
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
@@ -236,6 +244,7 @@ jobs:
     timeout-minutes: 1440
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - {arch: amd64, hv: kvm, platform: generic, os: ubuntu-24.04}
@@ -268,39 +277,57 @@ jobs:
         uses: ./.github/actions/run-make
         with:
           command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=build PRUNE=1 pkgs"
-          dockerhub-token: ""
-          dockerhub-account: ""
+          dockerhub-token: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+          dockerhub-account: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
           clean: false
       - name: Verify package inputs
         env:
           ARCH: ${{ matrix.arch }}
         run: |
           ./tools/eve-cosign.sh check-inputs "$RUNNER_TEMP/pkgs" "$ARCH" "$(docker version -f '{{.Server.Arch}}')"
-      - name: Check that no package was built
+      - name: Push remaining packages
+        uses: ./.github/actions/run-make
+        with:
+          command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=push PRUNE=1 pkgs"
+          dockerhub-token: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+          dockerhub-account: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          clean: false
+      - name: Sign packages built here
         run: |
-          [ ! -s "$RUNNER_TEMP/pkgs/built" ] || { echo "::error::the fork cannot push lfedge packages"; cat "$RUNNER_TEMP/pkgs/built"; exit 1; }
+          ./tools/eve-cosign.sh sign-built "$RUNNER_TEMP/pkgs"
       - name: Build EVE
         uses: ./.github/actions/run-make
         with:
           command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=build eve"
-          dockerhub-token: ""
-          dockerhub-account: ""
+          dockerhub-token: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+          dockerhub-account: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
           clean: false
       - name: Verify EVE inputs
         env:
           ARCH: ${{ matrix.arch }}
         run: |
           ./tools/eve-cosign.sh check-inputs "$RUNNER_TEMP/eve" "$ARCH" "$(docker version -f '{{.Server.Arch}}')"
-      - name: Check that the EVE build built no package
+      - name: Sign packages built by the EVE build
+        env:
+          ARCH: ${{ matrix.arch }}
+          HV: ${{ matrix.hv }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
-          [ ! -s "$RUNNER_TEMP/eve/built" ] || { echo "::error::the fork cannot push lfedge packages"; cat "$RUNNER_TEMP/eve/built"; exit 1; }
+          ./tools/eve-cosign.sh sign-built "$RUNNER_TEMP/eve"
+          mkdir -p pkg-tags
+          cat "$RUNNER_TEMP/pkgs/built-tags" "$RUNNER_TEMP/eve/built-tags" > "pkg-tags/eve-$ARCH-$HV-$PLATFORM"
+      - name: Hand the built package tags to the manifest job
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: pkg-tags-eve-${{ matrix.arch }}-${{ matrix.hv }}-${{ matrix.platform }}
+          path: pkg-tags
       - name: Collect and push SBOM and sources
         uses: ./.github/actions/run-make
         if: matrix.arch != 'riscv64'
         with:
           command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=build sbom collected_sources compare_sbom_collected_sources publish_sources"
-          dockerhub-token: ""
-          dockerhub-account: ""
+          dockerhub-token: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+          dockerhub-account: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
           clean: false
       - name: Login to Docker Hub
         if: startsWith(github.ref, 'refs/tags/')
@@ -356,10 +383,11 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
           password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
-      - name: Push the stand-in package's index
-        run: |
-          make linuxkit
-          build-tools/bin/linuxkit pkg manifest tools/rehearsal-pkg
+      - uses: ./.github/actions/run-make
+        with:
+          command: "V=1 LINUXKIT_PKG_TARGET=manifest pkgs"
+          dockerhub-token: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+          dockerhub-account: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         with:
@@ -376,7 +404,7 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: |
           cat pkg-tags/* | sort -u > "$RUNNER_TEMP/pkg-tags"
-          EVE_PKG_PREFIX=$FORK_REGISTRY ./tools/eve-cosign.sh sign-indexes "$RUNNER_TEMP/pkg-tags"
+          ./tools/eve-cosign.sh sign-indexes "$RUNNER_TEMP/pkg-tags"
 
 
   # ════════════════════════════════════════════════════════════════════════
