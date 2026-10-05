@@ -41,7 +41,7 @@ RUN make install
 # unfortunately /proc/cpuinfo on docker on M1 mac is not telling much, so let's use the bogomips
 ARG TARGETARCH
 ARG BUILDARCH
-RUN if [ "$TARGETARCH" = "$BUILDARCH" ]; then \
+RUN if [ "$TARGETARCH" = "$BUILDARCH" ] && [ "$TARGETARCH" != arm64 ]; then \
         if perl -ne 'exit 1 if (m/^bogomips\s*:\s*(\d+)/i && $1 < 500);' /proc/cpuinfo ; then \
             ./tests/bpftrace_test --gtest_filter=-"portability_analyser.*:utils.file_exists_and_ownedby_root" 2>/dev/null; \
         else \
