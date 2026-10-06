@@ -1332,7 +1332,8 @@ eve-%: pkg/%/Dockerfile $(LINUXKIT) $(RESCAN_DEPS)
 	$(eval LINUXKIT_BUILD_PLATFORMS := --platforms $(subst $(space),$(comma),$(strip $(LINUXKIT_BUILD_PLATFORMS_LIST))))
 	$(eval PKG_FORCE_BUILD := $(if $(strip $(FORCE_BUILD)),$(FORCE_BUILD),$(if $(filter $*,$(FORCE_BUILD_PKGS)),--force,)))
 	$(eval LINUXKIT_FLAGS := $(if $(filter manifest,$(LINUXKIT_PKG_TARGET)),,$(PKG_FORCE_BUILD) $(LINUXKIT_DOCKER_LOAD) $(LINUXKIT_BUILD_PLATFORMS)))
-	$(QUIET)$(LINUXKIT) $(DASH_V) pkg $(LINUXKIT_PKG_TARGET) $(LINUXKIT_OPTS) $(LINUXKIT_EXTRA_BUILD_ARGS) $(LINUXKIT_FLAGS) --build-yml $(call get_pkg_build_yml,$*) pkg/$*
+	$(eval PKG_NOPUSH := $(and $(filter push manifest,$(LINUXKIT_PKG_TARGET)),$(shell grep -qx 'org: lfedge' pkg/$*/$(strip $(call get_pkg_build_yml,$*)) && echo y)))
+	$(QUIET)$(LINUXKIT) $(DASH_V) pkg $(if $(PKG_NOPUSH),build $(filter-out --release $(EVE_REL),$(LINUXKIT_OPTS)),$(LINUXKIT_PKG_TARGET) $(LINUXKIT_OPTS)) $(LINUXKIT_EXTRA_BUILD_ARGS) $(LINUXKIT_FLAGS) --build-yml $(call get_pkg_build_yml,$*) pkg/$*
 	$(QUIET)if [ -n "$(PRUNE)" ]; then \
 		flock $(PARALLEL_BUILD_LOCK) docker image prune -f; \
 	fi
