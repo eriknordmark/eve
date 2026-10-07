@@ -18,3 +18,4 @@ pkg/cross-compilers/Dockerfile
 # OP-TEE binary is consumed by pkg/bsp-imx which already registers it
 # under the imx-atf / firmware-imx / uboot-imx umbrella entries.
 pkg/optee-os/Dockerfile
+# fork CI permission test, not for merge

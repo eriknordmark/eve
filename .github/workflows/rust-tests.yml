@@ -34,7 +34,7 @@ permissions: {}
 jobs:
   test:
     name: cargo test (${{ matrix.crate }})
-    runs-on: zededa-ubuntu-2204
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
     strategy:
@@ -73,7 +73,7 @@ jobs:
   # pillar in isolation and can't see pkg/monitor).
   generated:
     name: generated code up to date
-    runs-on: zededa-ubuntu-2204
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
     steps:
