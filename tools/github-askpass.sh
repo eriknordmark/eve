@@ -40,3 +40,4 @@ case "$prompt" in
   *[Uu]sername*) echo "x-access-token" ;;
   *) echo "$token" ;;
 esac
+# gate test
