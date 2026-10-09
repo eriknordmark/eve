@@ -118,7 +118,7 @@ tpm2 clear
 # so we end up with the same EK as EVE creates.
 printf '\x83\x71\x97\x67\x44\x84\xb3\xf8\x1a\x90\xcc\x8d\x46\xa5\xd7\x24\xfd\x52\xd7\x6e\x06\x52\x0b\x64\xf2\xa1\xda\x1b\x33\x14\x69\xaa' > "$EVE_TPM_STATE/ek_policy.bin"
 tpm2 createprimary -C e -G rsa2048:aes128cfb -g sha256 -c ek.ctx \
-    -a 'fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt' \
+    -a 'fixedtpm|fixedparent|sensitivedataorigin|adminwithpolicy|restricted|decrypt' \
     -L "$EVE_TPM_STATE/ek_policy.bin"
 flushtpm
 

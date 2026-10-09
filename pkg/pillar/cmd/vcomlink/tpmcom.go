@@ -186,11 +186,33 @@ func tpmActivateCredential(index tpmutil.Handle, cred, secret []byte) ([]byte, e
 	cred = cred[2:]
 	secret = secret[2:]
 
-	recoveredCred, err := tpm2.ActivateCredential(rw,
+	// The EK has adminWithPolicy and no userWithAuth, so it can only be
+	// authorized with a policy session satisfying the TCG EK policy,
+	// PolicySecret(TPM_RH_ENDORSEMENT).
+	session, _, err := tpm2.StartAuthSession(rw,
+		tpm2.HandleNull,
+		tpm2.HandleNull,
+		make([]byte, 16),
+		nil,
+		tpm2.SessionPolicy,
+		tpm2.AlgNull,
+		tpm2.AlgSHA256)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start auth session: %w", err)
+	}
+	defer tpm2.FlushContext(rw, session)
+
+	auth := tpm2.AuthCommand{Session: tpm2.HandlePasswordSession, Attributes: tpm2.AttrContinueSession}
+	if _, _, err := tpm2.PolicySecret(rw, tpm2.HandleEndorsement, auth, session,
+		nil, nil, nil, 0); err != nil {
+		return nil, fmt.Errorf("policy secret failed: %w", err)
+	}
+
+	auths := []tpm2.AuthCommand{auth, {Session: session, Attributes: tpm2.AttrContinueSession}}
+	recoveredCred, err := tpm2.ActivateCredentialUsingAuth(rw,
+		auths,
 		index,
 		etpm.TpmEKHdl,
-		etpm.EmptyPassword,
-		etpm.EmptyPassword,
 		cred,
 		secret)
 	if err != nil {
