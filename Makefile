@@ -1566,3 +1566,7 @@ help:
 	@echo
 	@echo "make run is currently an alias for make run-live"
 	@echo
+
+# FORK ONLY: push a stand-in image the way `eve` pushes EVE.
+release-name-test-%: $(LINUXKIT)
+	$(call push-eve-image,pkg/$@)

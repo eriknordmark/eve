@@ -1,0 +1,98 @@
+# Copyright (c) 2026 Zededa, Inc.
+# SPDX-License-Identifier: Apache-2.0
+# FORK ONLY: check that pushing an image the way `eve` does moves release
+# names that already exist. Image a is pushed for amd64 and arm64, then
+# image b, under a different content tag; every release name must end up on
+# b for both arches.
+---
+name: Release name test
+on:  # yamllint disable-line rule:truthy
+  push:
+    branches:
+      - "0.3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  IMAGE: docker.io/eriknordmark/eve-release-name-test
+
+jobs:
+  push-a:
+    if: github.event.repository.full_name == 'eriknordmark/eve'
+    strategy:
+      max-parallel: 1
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 # zizmor: ignore[artipacked]
+        with:
+          fetch-depth: 0
+      - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+      - name: Push image a
+        run: |
+          for hv in kvm k; do
+            make V=1 HV=$hv ROOTFS_VERSION=0.0.0-0.3-a LINUXKIT_PKG_TARGET=push release-name-test-a
+          done
+
+  push-b:
+    needs: push-a
+    strategy:
+      max-parallel: 1
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 # zizmor: ignore[artipacked]
+        with:
+          fetch-depth: 0
+      - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+      - name: Push image b
+        run: |
+          for hv in kvm k; do
+            make V=1 HV=$hv ROOTFS_VERSION=0.0.0-0.3-b LINUXKIT_PKG_TARGET=push release-name-test-b
+          done
+
+  check:
+    needs: push-b
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Expect every release name on image b
+        run: |
+          digest() {
+            docker buildx imagetools inspect --raw "$IMAGE:$1" |
+              jq -r --arg a "$2" '.manifests[] | select(.platform.architecture == $a) | .digest'
+          }
+          fail=
+          for hv in kvm k; do
+            names="0.3-$hv"
+            [ $hv = kvm ] && names="$names 0.3"
+            for a in amd64 arm64; do
+              want=$(digest "0.0.0-0.3-b-$hv" $a)
+              old=$(digest "0.0.0-0.3-a-$hv" $a)
+              echo "$hv $a: a=$old b=$want"
+              [ -n "$old" ] && [ "$old" != "$want" ] || fail=1
+              for n in $names; do
+                got=$(digest "$n" $a)
+                echo "  $n: $got"
+                [ -n "$want" ] && [ "$got" = "$want" ] || fail=1
+              done
+              got=$(docker buildx imagetools inspect --raw "$IMAGE:0.3-$hv-$a" | sha256sum | cut -d' ' -f1)
+              echo "  0.3-$hv-$a: sha256:$got"
+              [ "sha256:$got" = "$want" ] || fail=1
+            done
+          done
+          [ -z "$fail" ] || { echo "::error::a release name is not on image b"; exit 1; }
