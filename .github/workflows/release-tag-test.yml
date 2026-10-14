@@ -1,0 +1,86 @@
+# Copyright (c) 2026 Zededa, Inc.
+# SPDX-License-Identifier: Apache-2.0
+# FORK ONLY: check that a branch build pushes a package without a release
+# tag, and so does not pull it when it is already in the registry. The control
+# job runs the same push with the Makefile from before that change.
+---
+name: Release tag test
+on:  # yamllint disable-line rule:truthy
+  push:
+    branches:
+      - "0.2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  IMAGE: docker.io/eriknordmark/eve-release-tag-test
+
+jobs:
+  seed:
+    if: github.event.repository.full_name == 'eriknordmark/eve'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 # zizmor: ignore[artipacked]
+        with:
+          fetch-depth: 0
+      - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+      - name: Push the package under its content tag
+        run: make V=1 LINUXKIT_PKG_TARGET=push pkg/release-tag-test
+
+  treatment:
+    needs: seed
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 # zizmor: ignore[artipacked]
+        with:
+          fetch-depth: 0
+      - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+      - name: Push again from an empty cache
+        run: |
+          make -s --eval='opts: ; @echo "EVE_REL=[$(EVE_REL)] LINUXKIT_OPTS=[$(LINUXKIT_OPTS)]"' \
+            LINUXKIT_PKG_TARGET=push opts
+          make V=1 LINUXKIT_PKG_TARGET=push pkg/release-tag-test 2>&1 | tee "$RUNNER_TEMP/make.log"
+      - name: Expect no pull and no release tag
+        run: |
+          if grep 'into local cache for release' "$RUNNER_TEMP/make.log"; then
+            echo "::error::package pulled for a release tag"; exit 1
+          fi
+          if docker buildx imagetools inspect "$IMAGE:0.2"; then
+            echo "::error::$IMAGE:0.2 exists"; exit 1
+          fi
+
+  control:
+    needs: treatment
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 # zizmor: ignore[artipacked]
+        with:
+          fetch-depth: 0
+      - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+      - name: Push again with the previous Makefile
+        run: |
+          fix=$(git log -1 --format=%H --grep='^Stop adding release tags to packages$')
+          git show "$fix^:Makefile" > Makefile
+          make -s --eval='opts: ; @echo "EVE_REL=[$(EVE_REL)] LINUXKIT_OPTS=[$(LINUXKIT_OPTS)]"' \
+            LINUXKIT_PKG_TARGET=push opts
+          make V=1 LINUXKIT_PKG_TARGET=push pkg/release-tag-test 2>&1 | tee "$RUNNER_TEMP/make.log"
+      - name: Expect a pull and a release tag
+        run: |
+          grep 'into local cache for release' "$RUNNER_TEMP/make.log"
+          docker buildx imagetools inspect "$IMAGE:0.2"
