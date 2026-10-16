@@ -76,7 +76,7 @@ verified() {
     local err
     err=$(cosign_verify "$1" 2>&1) && return 0
     case "$err" in
-    *"no signatures found"* | *"no matching signatures"* | *"image tag not found"*)
+    *"no signatures found"* | *"no matching signatures"* | *"image tag not found"* | *"UNAUTHORIZED: authentication required"*)
         return 1
         ;;
     esac
