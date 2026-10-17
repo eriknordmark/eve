@@ -80,6 +80,40 @@ jobs:
           done
           die "$GITHUB_SHA ($GITHUB_REF) is on none of: $branches"
 
+  # GitHub's review request does not reliably reach the reviewers, so an issue
+  # mentions them (repository variable RELEASE_APPROVERS, "@user ...") with
+  # the run and the digests that will be signed.
+  request:
+    needs: check
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Download images
+        if: inputs.images != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: ${{ inputs.images }}
+          path: images
+      - name: Open the approval issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVERS: ${{ vars.RELEASE_APPROVERS }}
+        run: |
+          set -euo pipefail
+          tag=${GITHUB_REF#refs/tags/}
+          {
+            echo "$APPROVERS: release \`$tag\` ($GITHUB_SHA) waits for approval of the"
+            echo "\`release\` environment in $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
+            echo "Check it first as docs/SIGNING.md \"Approving a release\" describes."
+            echo
+            echo "Images to be signed:"
+            echo '```'
+            find images -name images.txt -exec cat {} + 2> /dev/null | sort -u
+            echo '```'
+          } > "$RUNNER_TEMP/body.md"
+          gh issue create -R "$GITHUB_REPOSITORY" --title "Approve release $tag" --body-file "$RUNNER_TEMP/body.md"
+
   sign:
     needs: check
     runs-on: ubuntu-24.04
