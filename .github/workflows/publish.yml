@@ -547,6 +547,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      issues: write
     uses: lf-edge/eve/.github/workflows/release-sign.yml@master  # zizmor: ignore[unpinned-uses] the signing identity is release-sign.yml at master
     secrets:
       registry-username: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}

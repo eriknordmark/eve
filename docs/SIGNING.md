@@ -45,10 +45,11 @@ certificate's Source Repository Ref and Digest.
 
 ## Approving a release
 
-GitHub's approval request links to the Publish run, where the `sign / sign`
-job waits behind "Review deployments". The run does not link the draft
-release or name the digests. Before approving, rebuild the tag independently
-and compare the rebuild with the release images:
+When a release waits for approval, `release-sign.yml` opens an issue "Approve
+release `<tag>`" that mentions the approvers, links the Publish run, where the
+`sign / sign` job waits behind "Review deployments", and lists the image
+digests it will sign. Before approving, rebuild the tag independently and
+compare the rebuild with the release images:
 
 1. **Find the draft release.** Drafts are visible only to users with push
    access. On <https://github.com/lf-edge/eve/releases> the draft carries the
@@ -186,7 +187,9 @@ Not signed by EVE's workflows, and therefore not verified: `lfedge/eve-kernel`
 ## Enabling on a branch
 
 1. Create the `release` environment with required reviewers, prevent
-   self-review on, and deployments limited to release tag names.
+   self-review on, and deployments limited to release tag names. Set the
+   repository variable `RELEASE_APPROVERS` to the reviewers to mention, as
+   `@user @user …`.
 2. Package images pushed before signing carry no signature and are reused by
    content hash indefinitely. Change every package's source on the branch so
    that the next build rebuilds, pushes and signs all of them.
