@@ -313,7 +313,8 @@ jobs:
           name: pkg-tags-eve-${{ matrix.arch }}-${{ matrix.hv }}-${{ matrix.platform }}
           path: pkg-tags
       # FORK ONLY: a branch build pushes the sources image as on master, but
-      # to the fork's namespace; refuse to run if linuxkit would push to lfedge.
+      # to the fork's namespace (pkg/sources/build.yml); refuse to run if
+      # linuxkit would push it to lfedge.
       - name: Login to Docker Hub for the sources push
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
@@ -323,17 +324,15 @@ jobs:
       - name: Check the sources push goes to the fork namespace
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         env:
-          LINUXKIT_PKG_ORG: ${{ vars.DOCKERHUB_SIGN_NAMESPACE }}
+          NAMESPACE: ${{ vars.DOCKERHUB_SIGN_NAMESPACE }}
         run: |
           make -e linuxkit >/dev/null
           tag=$(build-tools/bin/linuxkit pkg show-tag pkg/sources)
           echo "$tag"
-          case "$tag" in "$LINUXKIT_PKG_ORG"/eve-sources:*) ;; *) echo "::error::sources would push to $tag"; exit 1;; esac
+          case "$tag" in "$NAMESPACE"/eve-sources:*) ;; *) echo "::error::sources would push to $tag"; exit 1;; esac
       - name: Collect and push SBOM and sources
         uses: ./.github/actions/run-make
         if: matrix.arch != 'riscv64'
-        env:
-          LINUXKIT_PKG_ORG: ${{ vars.DOCKERHUB_SIGN_NAMESPACE }}
         with:
           command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=${{ startsWith(github.ref, 'refs/tags/') && 'build' || 'push' }} sbom collected_sources compare_sbom_collected_sources publish_sources"
           dockerhub-token: ""
