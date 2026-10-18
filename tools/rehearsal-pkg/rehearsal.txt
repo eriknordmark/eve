@@ -1,1 +1,1 @@
-rehearsal 0.0.1-rc12
+rehearsal pkg-tags-bug
