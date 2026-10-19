@@ -43,6 +43,7 @@ IMGFILE=/rootfs.img
 
   # shellcheck disable=SC2086
   mksquashfs /tmp/rootfs/ $IMGFILE -noappend -comp xz -Xbcj x86,arm $BLOCKSIZE_ARG -no-recovery
+  /verity-append $IMGFILE
 )
 
 $EXPORT_CMD
