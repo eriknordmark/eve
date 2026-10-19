@@ -12,6 +12,7 @@ init:
   - GRUB_TAG
   - FW_TAG
   - GPTTOOLS_TAG
+  - VERITY_INITRD_TAG
   - UDEV_TAG
 onboot:
   - name: rngd
