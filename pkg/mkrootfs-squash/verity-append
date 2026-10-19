@@ -1,0 +1,55 @@
+#!/bin/sh
+# Copyright (c) 2026 Zededa, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# verity-append <squashfs image>
+#
+# Appends a dm-verity hash tree for the squashfs and an unsigned verity
+# descriptor, so that the image written to IMGA/IMGB carries everything the
+# initrd needs to open it through dm-verity. Layout, from the start of the
+# image:
+#
+#   squashfs | pad to 1 MiB | descriptor (1 MiB) | hash tree
+#
+# The descriptor area starts at the squashfs bytes_used rounded up to 1 MiB;
+# the initrd computes that offset from the squashfs superblock. Its first
+# 4 KiB block is the text descriptor below, and the PKCS#7 signature of the
+# root hash, which a signer adds, starts at the second block. sig_len=0
+# means unsigned.
+#
+#   EVE-VERITY-1
+#   root_hash=<hex>
+#   salt=<hex>
+#   hash_offset=<bytes>
+#   data_blocks=<4 KiB blocks>
+#   sig_len=<bytes>
+#   end
+#
+# The salt is the SHA-256 of the squashfs and there is no verity superblock,
+# so the output is a function of the squashfs alone.
+
+set -e
+
+IMG=$1
+BLK=4096
+MIB=1048576
+
+# squashfs superblock: bytes_used is a little-endian u64 at offset 40
+BYTES=$(od -An -tu8 -j40 -N8 "$IMG" | tr -d ' ')
+NB=$(( (BYTES + BLK - 1) / BLK ))
+DOFF=$(( (NB * BLK + MIB - 1) / MIB * MIB ))
+HOFF=$(( DOFF + MIB ))
+SALT=$(head -c $(( NB * BLK )) "$IMG" | sha256sum | cut -d' ' -f1)
+
+truncate -s "$HOFF" "$IMG"
+OUT=$(veritysetup format "$IMG" "$IMG" --no-superblock --hash=sha256 \
+      --data-block-size=$BLK --hash-block-size=$BLK --data-blocks="$NB" \
+      --hash-offset="$HOFF" --salt="$SALT")
+ROOT_HASH=$(echo "$OUT" | awk -F: '/^Root hash/ {gsub(/[ \t]/, "", $2); print $2}')
+[ -n "$ROOT_HASH" ] || { echo "verity-append: no root hash from veritysetup" >&2; exit 1; }
+
+printf 'EVE-VERITY-1\nroot_hash=%s\nsalt=%s\nhash_offset=%d\ndata_blocks=%d\nsig_len=0\nend\n' \
+    "$ROOT_HASH" "$SALT" "$HOFF" "$NB" |
+    dd of="$IMG" bs=$BLK seek=$(( DOFF / BLK )) conv=notrunc status=none
+
+echo "verity: data_blocks=$NB descriptor at $DOFF hash tree at $HOFF root_hash=$ROOT_HASH" >&2
