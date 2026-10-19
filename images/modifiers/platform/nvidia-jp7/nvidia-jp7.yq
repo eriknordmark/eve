@@ -1,1 +1,1 @@
-.init += ["NVIDIA_TAG", "OPTEE_CLIENT_TAG"]
+.init += ["NVIDIA_TAG", "OPTEE_CLIENT_TAG"] | del(.init[] | select(. == "VERITY_INITRD_TAG"))
