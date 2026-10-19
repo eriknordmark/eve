@@ -9,7 +9,11 @@ if cat /proc/cmdline | grep -q crashkernel; then
     # This means we are on arch which does not support kdump
     # (e.g. riscv64, arm64) (see pkg/grub/rootfs.cfg)
     #
-    kexec -p --reuse-cmdline --command-line="irqpoll nr_cpus=1 reset_devices" /boot/kernel
+    # With root=/dev/mapper/eve-root the crash kernel needs the verity initrd
+    INITRD=
+    [ -f /boot/initrd.img ] && INITRD=--initrd=/boot/initrd.img
+    # shellcheck disable=SC2086
+    kexec -p $INITRD --reuse-cmdline --command-line="irqpoll nr_cpus=1 reset_devices" /boot/kernel
 fi
 
 #
