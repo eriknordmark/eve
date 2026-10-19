@@ -1,0 +1,829 @@
+From 9a7f777fa0fa0e06d817a14bb2ade014eb13eef6 Mon Sep 17 00:00:00 2001
+From: eriknordmark <erik@zededa.com>
+Date: Mon, 19 Oct 2026 17:27:56 +0200
+Subject: [PATCH] commands: Add eve_overrides command
+
+eve_overrides reads EVE's /config/grub.cfg as data and applies only the
+documented override forms (set_global of the kernel command line and
+cgroup variables, with a per-parameter value grammar). It lets a GRUB that
+enforces signatures keep honoring an unsigned override file without
+executing it. The file is measured into PCR 9 before parsing; with
+--require-tpm nothing is applied unless that measurement succeeds.
+Rejected lines are recorded in the TPM event log (PCR 8).
+
+Signed-off-by: eriknordmark <erik@zededa.com>
+---
+ grub-core/Makefile.core.def        |   6 +
+ grub-core/commands/eve_overrides.c | 786 +++++++++++++++++++++++++++++
+ 2 files changed, 792 insertions(+)
+ create mode 100644 grub-core/commands/eve_overrides.c
+
+diff --git a/grub-core/Makefile.core.def b/grub-core/Makefile.core.def
+index 32c29d8..9266030 100644
+--- a/grub-core/Makefile.core.def
++++ b/grub-core/Makefile.core.def
+@@ -2632,3 +2632,9 @@ module = {
+   efi = commands/efi/getenv.c;
+   enable = efi;
+ };
++
++module = {
++  name = eve_overrides;
++  common = commands/eve_overrides.c;
++  enable = efi;
++};
+diff --git a/grub-core/commands/eve_overrides.c b/grub-core/commands/eve_overrides.c
+new file mode 100644
+index 0000000..950728c
+--- /dev/null
++++ b/grub-core/commands/eve_overrides.c
+@@ -0,0 +1,786 @@
++/* eve_overrides.c - apply allow-listed lines of an unsigned EVE override file.  */
++/*
++ *  GRUB  --  GRand Unified Bootloader
++ *  Copyright (C) 2026  Zededa, Inc.
++ *
++ *  GRUB is free software: you can redistribute it and/or modify
++ *  it under the terms of the GNU General Public License as published by
++ *  the Free Software Foundation, either version 3 of the License, or
++ *  (at your option) any later version.
++ *
++ *  GRUB is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU General Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License
++ *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++/*
++ * eve_overrides [--require-tpm] [--pcr N] FILE
++ *
++ * Reads FILE, an EVE /config/grub.cfg, as data, never as GRUB script, so a
++ * GRUB that enforces signatures can honor the documented override forms
++ * without a signature on the file. The whole file is measured into PCR N
++ * (default 9, where GRUB's tpm verifier measures a sourced file) before any
++ * line is applied. With --require-tpm nothing is applied unless that
++ * measurement succeeds. Accepted lines:
++ *
++ *   set_global VAR "VALUE" | set VAR="VALUE" | export VAR
++ *   set_global timeout N | set timeout=N
++ *   set_no_dirsync | set_isolcpus
++ *   set_global eve_flavor NAME            (accepted, no effect, as when sourced)
++ *
++ * VAR is one of vars[] and VALUE a list of tokens from keys[], each with its
++ * own value grammar. A rejected line is skipped and recorded in the TPM event
++ * log (PCR 8). Sets eve_overrides_status (applied | no-tpm) and
++ * eve_overrides_rejected (count).
++ *
++ * The grammars keep '=', quotes and '$' out of values, and no token may
++ * contain "getty": EVE userspace matches some kernel parameters as
++ * substrings of /proc/cmdline (001-getty greps for "getty").
++ */
++
++#include <grub/dl.h>
++#include <grub/env.h>
++#include <grub/extcmd.h>
++#include <grub/file.h>
++#include <grub/i18n.h>
++#include <grub/misc.h>
++#include <grub/mm.h>
++#include <grub/tpm.h>
++
++GRUB_MOD_LICENSE ("GPLv3+");
++
++#define MAX_FILE	65536
++#define MAX_LINE	1024
++#define MAX_VAR		1024
++#define MAX_REJECT_EVENTS 16
++#define MAX_REJECT_DESC	160
++
++typedef int (*validator_t) (const char *s, const char *end);
++
++/* Forms a token may take.  */
++#define F_BARE	1	/* KEY */
++#define F_VALUE	2	/* KEY=VALUE */
++#define F_EMPTY	4	/* KEY= */
++
++/* Key groups.  */
++#define G_CGROUP 1	/* memory and CPU limits, only in the hv_* variables */
++#define G_CMD	 2	/* kernel and EVE parameters */
++
++struct key
++{
++  const char *name;
++  int group;
++  int forms;
++  validator_t val;
++};
++
++/* Variable modes.  */
++#define M_REPLACE 1	/* set_global VAR "VALUE" */
++#define M_APPEND  2	/* set_global VAR "$VAR VALUE" */
++#define M_ONCE	  4	/* each key at most once (010-eve-cgroup) */
++
++struct var
++{
++  const char *name;
++  int modes;
++  int group;			/* any key of this group, or */
++  const char *const keys[3];	/* only these keys */
++};
++
++static int val_mem (const char *s, const char *end);
++static int val_size (const char *s, const char *end);
++static int val_num3 (const char *s, const char *end);
++static int val_num4 (const char *s, const char *end);
++static int val_console (const char *s, const char *end);
++static int val_modlist (const char *s, const char *end);
++static int val_disklist (const char *s, const char *end);
++static int val_raid (const char *s, const char *end);
++static int val_word (const char *s, const char *end);
++static int val_cpulist (const char *s, const char *end);
++static int val_pci (const char *s, const char *end);
++static int val_aspm (const char *s, const char *end);
++static int val_01 (const char *s, const char *end);
++static int val_portpm (const char *s, const char *end);
++static int val_devid (const char *s, const char *end);
++
++/*
++ * The field catalogue of /config/grub.cfg. eve_* parameters are listed one by
++ * one: eve_root, eve_soft_serial and eve_disable_verify must stay out.
++ */
++static const struct key keys[] = {
++  {"dom0_mem", G_CGROUP, F_VALUE, val_mem},
++  {"eve_mem", G_CGROUP, F_VALUE, val_mem},
++  {"ctrd_mem", G_CGROUP, F_VALUE, val_mem},
++  {"dom0_max_vcpus", G_CGROUP, F_VALUE, val_num3},
++  {"eve_max_vcpus", G_CGROUP, F_VALUE, val_num3},
++  {"ctrd_max_vcpus", G_CGROUP, F_VALUE, val_num3},
++  {"dom0_vcpus_pin", G_CGROUP, F_BARE, NULL},
++
++  {"console", G_CMD, F_VALUE, val_console},
++  {"eve_no_dirsync", G_CMD, F_BARE, NULL},
++  {"eve_blackbox", G_CMD, F_BARE, NULL},
++  {"eve_pause_before_install", G_CMD, F_BARE, NULL},
++  {"eve_pause_after_install", G_CMD, F_BARE, NULL},
++  {"eve_reboot_after_install", G_CMD, F_BARE, NULL},
++  {"eve_install_skip_config", G_CMD, F_BARE, NULL},
++  {"eve_install_skip_persist", G_CMD, F_BARE, NULL},
++  {"eve_install_skip_rootfs", G_CMD, F_BARE, NULL},
++  {"eve_install_skip_zfs_checks", G_CMD, F_BARE, NULL},
++  {"eve_nuke_all_disks", G_CMD, F_BARE, NULL},
++  {"eve_install_disk", G_CMD, F_VALUE | F_EMPTY, val_disklist},
++  {"eve_persist_disk", G_CMD, F_VALUE | F_EMPTY, val_disklist},
++  {"eve_nuke_disks", G_CMD, F_VALUE | F_EMPTY, val_disklist},
++  {"eve_install_zfs_with_raid_level", G_CMD, F_BARE | F_VALUE, val_raid},
++  {"eve_install_k3s_etcd_sizeGB", G_CMD, F_VALUE, val_num4},
++  {"eve_install_server", G_CMD, F_VALUE, val_word},
++  {"isolcpus", G_CMD, F_VALUE, val_cpulist},
++  {"nohz_full", G_CMD, F_VALUE, val_cpulist},
++  {"video", G_CMD, F_VALUE, val_word},
++  {"pci", G_CMD, F_VALUE, val_pci},
++  {"pcie_aspm", G_CMD, F_VALUE, val_aspm},
++  {"pcie_port_pm", G_CMD, F_VALUE, val_portpm},
++  {"acpi_no_watchdog", G_CMD, F_BARE, NULL},
++  {"rootwait", G_CMD, F_BARE, NULL},
++  {"rootdelay", G_CMD, F_VALUE, val_num3},
++  {"log_buf_len", G_CMD, F_VALUE, val_size},
++  {"modprobe.blacklist", G_CMD, F_VALUE, val_modlist},
++  {"kempld_core.force_device_id", G_CMD, F_VALUE, val_devid},
++  {"vfio_pci.disable_idle_d3", G_CMD, F_VALUE, val_01},
++  {"nvethernet.macsec_enable", G_CMD, F_VALUE, val_01},
++  {NULL, 0, 0, NULL}
++};
++
++static const struct var vars[] = {
++  {"hv_dom0_mem_settings", M_REPLACE | M_ONCE, 0, {"dom0_mem"}},
++  {"hv_eve_mem_settings", M_REPLACE | M_ONCE, 0, {"eve_mem"}},
++  {"hv_ctrd_mem_settings", M_REPLACE | M_ONCE, 0, {"ctrd_mem"}},
++  {"hv_dom0_cpu_settings", M_REPLACE | M_ONCE, 0, {"dom0_max_vcpus", "dom0_vcpus_pin"}},
++  {"hv_eve_cpu_settings", M_REPLACE | M_ONCE, 0, {"eve_max_vcpus"}},
++  {"hv_ctrd_cpu_settings", M_REPLACE | M_ONCE, 0, {"ctrd_max_vcpus"}},
++  {"dom0_console", M_REPLACE | M_APPEND, 0, {"console"}},
++  {"dom0_platform_tweaks", M_REPLACE | M_APPEND, G_CMD, {NULL}},
++  {"dom0_extra_args", M_APPEND, G_CMD, {NULL}},
++  {NULL, 0, 0, {NULL}}
++};
++
++static const char *const mod_allow[] = {
++  "intel_pch_thermal", "wdat_wdt", NULL
++};
++
++/* Console device prefixes; a unit number must follow.  */
++static const char *const console_allow[] = {
++  "ttyS", "ttyAMA", "ttymxc", "ttyTCU", "ttyMSM", "hvc", "tty", NULL
++};
++
++static const char *const pci_allow[] = {
++  "realloc=off", "realloc=on", "noaer", "nomsi", "pcie_bus_perf",
++  "pcie_bus_safe", NULL
++};
++
++static const char *const raid_allow[] = {
++  "none", "raid1", "raid5", "raid6", NULL
++};
++
++static const struct grub_arg_option options[] =
++  {
++    {"require-tpm", 't', 0, N_("Apply nothing without a TPM measurement."), 0, 0},
++    {"pcr", 'p', 0, N_("PCR to measure the file into. Default 9."), 0, ARG_TYPE_INT},
++    {0, 0, 0, 0, 0, 0}
++  };
++
++static int
++in_list (const char *const *list, const char *s, grub_size_t len)
++{
++  for (; *list; list++)
++    if (grub_strlen (*list) == len && grub_strncmp (*list, s, len) == 0)
++      return 1;
++  return 0;
++}
++
++static int
++is_space (char c)
++{
++  return c == ' ' || c == '\t';
++}
++
++/* Number of decimal digits at s, at most max; 0 if none or more than max.  */
++static grub_size_t
++digits (const char *s, const char *end, grub_size_t max)
++{
++  grub_size_t n = 0;
++  while (s + n < end && grub_isdigit (s[n]))
++    n++;
++  return n > max ? 0 : n;
++}
++
++/* SIZE = 1-6 digits, optional K|M|G. Returns its length, 0 if no match.  */
++static grub_size_t
++mem_size (const char *s, const char *end)
++{
++  grub_size_t n = digits (s, end, 6);
++  if (n && s + n < end && (s[n] == 'K' || s[n] == 'M' || s[n] == 'G'))
++    n++;
++  return n;
++}
++
++static int
++val_size (const char *s, const char *end)
++{
++  grub_size_t n = mem_size (s, end);
++  return n && s + n == end;
++}
++
++/* SIZE[,max:SIZE]  */
++static int
++val_mem (const char *s, const char *end)
++{
++  grub_size_t n = mem_size (s, end);
++  if (!n)
++    return 0;
++  s += n;
++  if (s == end)
++    return 1;
++  if (end - s < 5 || grub_strncmp (s, ",max:", 5) != 0)
++    return 0;
++  return val_size (s + 5, end);
++}
++
++static int
++val_num3 (const char *s, const char *end)
++{
++  grub_size_t n = digits (s, end, 3);
++  return n && s + n == end;
++}
++
++static int
++val_num4 (const char *s, const char *end)
++{
++  grub_size_t n = digits (s, end, 4);
++  return n && s + n == end;
++}
++
++/* ITEM[,ITEM]... with every ITEM in list.  */
++static int
++val_list (const char *const *list, const char *s, const char *end)
++{
++  while (s < end)
++    {
++      const char *c = s;
++      while (c < end && *c != ',')
++	c++;
++      if (!in_list (list, s, c - s))
++	return 0;
++      if (c < end && c + 1 == end)
++	return 0;
++      s = c < end ? c + 1 : c;
++    }
++  return 1;
++}
++
++static int
++val_modlist (const char *s, const char *end)
++{
++  return val_list (mod_allow, s, end);
++}
++
++static int
++val_pci (const char *s, const char *end)
++{
++  return val_list (pci_allow, s, end);
++}
++
++static int
++val_raid (const char *s, const char *end)
++{
++  return in_list (raid_allow, s, end - s);
++}
++
++/* Characters from set, between 1 and max of them.  */
++static int
++val_chars (const char *s, const char *end, const char *set, grub_size_t max)
++{
++  const char *p;
++  if (s == end || (grub_size_t) (end - s) > max)
++    return 0;
++  for (p = s; p < end; p++)
++    if (!grub_isalnum (*p) && !grub_strchr (set, *p))
++      return 0;
++  return 1;
++}
++
++/* DISK[,DISK]...: device names or /dev paths.  */
++static int
++val_disklist (const char *s, const char *end)
++{
++  return val_chars (s, end, ",/_-", 128);
++}
++
++/* URLs and video modes: no '=', quotes, '$' or spaces.  */
++static int
++val_word (const char *s, const char *end)
++{
++  return val_chars (s, end, "._:/@,-", 128);
++}
++
++/* [FLAG,]...CPULIST, e.g. inverse,0 or 2-7.  */
++static int
++val_cpulist (const char *s, const char *end)
++{
++  return val_chars (s, end, ",_-", 64);
++}
++
++static int
++val_aspm (const char *s, const char *end)
++{
++  static const char *const l[] = { "off", "force", NULL };
++  return in_list (l, s, end - s);
++}
++
++static int
++val_portpm (const char *s, const char *end)
++{
++  static const char *const l[] = { "off", "on", "force", NULL };
++  return in_list (l, s, end - s);
++}
++
++static int
++val_01 (const char *s, const char *end)
++{
++  return end - s == 1 && (*s == '0' || *s == '1');
++}
++
++static int
++val_devid (const char *s, const char *end)
++{
++  const char *p;
++  if (s == end || end - s > 8)
++    return 0;
++  for (p = s; p < end; p++)
++    if (!grub_isupper (*p) && !grub_isdigit (*p))
++      return 0;
++  return 1;
++}
++
++/* DEV[,BAUD[n8]]: DEV a console_allow prefix plus 1-2 digits, BAUD 4-7 digits.  */
++static int
++val_console (const char *s, const char *end)
++{
++  const char *const *p;
++  grub_size_t n = 0;
++  for (p = console_allow; *p; p++)
++    {
++      grub_size_t l = grub_strlen (*p);
++      if ((grub_size_t) (end - s) > l && grub_strncmp (s, *p, l) == 0
++	  && (n = digits (s + l, end, 2)))
++	break;
++    }
++  if (!*p)
++    return 0;
++  s += grub_strlen (*p) + n;
++  if (s == end)
++    return 1;
++  if (*s++ != ',')
++    return 0;
++  n = digits (s, end, 7);
++  if (n < 4)
++    return 0;
++  s += n;
++  if (s == end)
++    return 1;
++  return end - s == 2 && s[0] == 'n' && s[1] == '8';
++}
++
++static const struct var *
++find_var (const char *name)
++{
++  const struct var *v;
++  for (v = vars; v->name; v++)
++    if (grub_strcmp (v->name, name) == 0)
++      return v;
++  return NULL;
++}
++
++static const struct key *
++find_key (const char *s, grub_size_t len)
++{
++  const struct key *k;
++  for (k = keys; k->name; k++)
++    if (grub_strlen (k->name) == len && grub_strncmp (k->name, s, len) == 0)
++      return k;
++  return NULL;
++}
++
++static int
++key_allowed (const struct var *var, const struct key *k)
++{
++  if (var->group)
++    return k->group == var->group;
++  return in_list (var->keys, k->name, grub_strlen (k->name));
++}
++
++static int
++token_ok (const struct key *k, const char *eq, const char *end)
++{
++  if (!eq)
++    return k->forms & F_BARE;
++  if (eq + 1 == end)
++    return k->forms & F_EMPTY;
++  return (k->forms & F_VALUE) && k->val (eq + 1, end);
++}
++
++/* Checks the tokens of v against var; returns the number of tokens, -1 if any
++   is not allowed.  */
++static int
++tokens_ok (const struct var *var, const char *v)
++{
++  const struct key *seen[8];
++  int ntok = 0, nseen = 0, i;
++
++  while (*v)
++    {
++      const char *t, *eq = NULL;
++      const struct key *k;
++      char tok[MAX_LINE + 1];
++
++      while (is_space (*v))
++	v++;
++      if (!*v)
++	break;
++      t = v;
++      while (*v && !is_space (*v))
++	{
++	  if (*v == '=' && !eq)
++	    eq = v;
++	  v++;
++	}
++      grub_memcpy (tok, t, v - t);
++      tok[v - t] = 0;
++      if (grub_strstr (tok, "getty"))
++	return -1;
++      k = find_key (t, (eq ? eq : v) - t);
++      if (!k || !key_allowed (var, k) || !token_ok (k, eq, v))
++	return -1;
++      if (var->modes & M_ONCE)
++	{
++	  for (i = 0; i < nseen; i++)
++	    if (seen[i] == k)
++	      return -1;
++	  if (nseen == (int) ARRAY_SIZE (seen))
++	    return -1;
++	  seen[nseen++] = k;
++	}
++      ntok++;
++    }
++  return ntok;
++}
++
++static void
++log_rejected (int lineno, const char *line)
++{
++  char desc[MAX_REJECT_DESC + 8];
++  grub_size_t n = grub_snprintf (desc, sizeof (desc),
++				 "eve_overrides: rejected line %d: ", lineno);
++  const char *c;
++
++  /* TEXT comes from an unsigned file: escape it and bound its length.  */
++  for (c = line; *c && n < MAX_REJECT_DESC; c++)
++    {
++      unsigned char u = (unsigned char) *c;
++      if (u >= 0x20 && u < 0x7f && u != '\\')
++	desc[n++] = u;
++      else
++	n += grub_snprintf (desc + n, sizeof (desc) - n, "\\x%02x", u);
++    }
++  if (*c)
++    n += grub_snprintf (desc + n, sizeof (desc) - n, "...");
++  desc[n] = 0;
++  grub_tpm_measure ((unsigned char *) line, grub_strlen (line),
++		    GRUB_STRING_PCR, desc);
++  grub_errno = GRUB_ERR_NONE;
++}
++
++static void
++set_var (const char *name, const char *val)
++{
++  grub_env_set (name, val);
++  grub_env_export (name);
++  grub_dprintf ("eve_overrides", "%s=\"%s\"\n", name, val);
++}
++
++/* Applies one assignment; value is unquoted and NUL-terminated.  */
++static int
++apply_assign (const char *name, const char *value)
++{
++  const char *rest = value;
++  const struct var *var;
++  grub_size_t nlen = grub_strlen (name);
++  int append = 0, ntok;
++
++  if (grub_strcmp (name, "timeout") == 0)
++    {
++      if (!val_num3 (value, value + grub_strlen (value)))
++	return 0;
++      set_var (name, value);
++      return 1;
++    }
++  if (grub_strcmp (name, "eve_flavor") == 0)
++    /* The boot flow is chosen before the override file is read.  */
++    return val_chars (value, value + grub_strlen (value), "", 8);
++
++  var = find_var (name);
++  if (!var)
++    return 0;
++
++  if (*rest == '$')
++    {
++      rest++;
++      if (*rest == '{')
++	{
++	  rest++;
++	  if (grub_strncmp (rest, name, nlen) != 0 || rest[nlen] != '}')
++	    return 0;
++	  rest += nlen + 1;
++	}
++      else
++	{
++	  if (grub_strncmp (rest, name, nlen) != 0)
++	    return 0;
++	  rest += nlen;
++	}
++      if (*rest && !is_space (*rest))
++	return 0;
++      append = 1;
++    }
++  if (!(var->modes & (append ? M_APPEND : M_REPLACE)))
++    return 0;
++  ntok = tokens_ok (var, rest);
++  if (ntok < 0 || (!append && ntok == 0))
++    return 0;
++
++  if (append)
++    {
++      const char *cur = grub_env_get (name);
++      char *v;
++      if ((cur ? grub_strlen (cur) : 0) + grub_strlen (rest) > MAX_VAR)
++	return 0;
++      v = grub_xasprintf ("%s%s", cur ? cur : "", rest);
++      if (!v)
++	return 0;
++      set_var (name, v);
++      grub_free (v);
++    }
++  else
++    {
++      if (grub_strlen (rest) > MAX_VAR)
++	return 0;
++      set_var (name, rest);
++    }
++  return 1;
++}
++
++/* Strips one pair of double quotes; rejects any other quote, '\' or '$' past
++   the leading "$VAR".  */
++static char *
++unquote (char *s)
++{
++  grub_size_t l = grub_strlen (s);
++  if (l >= 2 && s[0] == '"' && s[l - 1] == '"')
++    {
++      s[l - 1] = 0;
++      s++;
++    }
++  if (grub_strchr (s, '"') || grub_strchr (s, '\'') || grub_strchr (s, '\\')
++      || grub_strchr (s, ';') || (grub_strchr (s, '$')
++				  && grub_strchr (s, '$') != s))
++    return NULL;
++  if (*s == '$' && grub_strchr (s + 1, '$'))
++    return NULL;
++  return s;
++}
++
++static char *
++next_word (char **p)
++{
++  char *w;
++  while (is_space (**p))
++    (*p)++;
++  w = *p;
++  while (**p && !is_space (**p))
++    (*p)++;
++  if (**p)
++    *(*p)++ = 0;
++  while (is_space (**p))
++    (*p)++;
++  return w;
++}
++
++static int
++apply_line (char *line)
++{
++  char *p = line, *e, *name, *val;
++
++  /* A comment starts a line or follows a blank; no value contains '#'.  */
++  for (e = p; *e; e++)
++    if (*e == '#' && (e == p || is_space (e[-1])))
++      {
++	*e = 0;
++	break;
++      }
++  while (is_space (*p))
++    p++;
++  e = p + grub_strlen (p);
++  while (e > p && (is_space (e[-1]) || e[-1] == '\r'))
++    *--e = 0;
++  if (!*p)
++    return 1;
++
++  if (grub_strcmp (p, "set_no_dirsync") == 0)
++    return apply_assign ("dom0_extra_args", "$dom0_extra_args eve_no_dirsync");
++  if (grub_strcmp (p, "set_isolcpus") == 0)
++    return apply_assign ("dom0_extra_args",
++			 "$dom0_extra_args isolcpus=inverse,0 nohz_full=inverse,0");
++
++  name = next_word (&p);
++  if (grub_strcmp (name, "set_global") == 0)
++    {
++      name = next_word (&p);
++      if (!*name || !*p)
++	return 0;
++      val = unquote (p);
++      return val ? apply_assign (name, val) : 0;
++    }
++  if (grub_strcmp (name, "set") == 0)
++    {
++      name = p;
++      while (*p && *p != '=' && !is_space (*p))
++	p++;
++      if (*p != '=' || p == name)
++	return 0;
++      *p++ = 0;
++      val = unquote (p);
++      return val ? apply_assign (name, val) : 0;
++    }
++  if (grub_strcmp (name, "export") == 0)
++    {
++      name = next_word (&p);
++      return !*p && (find_var (name) || grub_strcmp (name, "timeout") == 0);
++    }
++  return 0;
++}
++
++static grub_err_t
++grub_cmd_eve_overrides (grub_extcmd_context_t ctxt, int argc, char **args)
++{
++  struct grub_arg_list *state = ctxt->state;
++  int pcr = GRUB_BINARY_PCR;
++  int measured = 0, applied = 0, rejected = 0, lineno = 0;
++  grub_file_t file;
++  grub_ssize_t size;
++  grub_off_t fsize;
++  char *buf, *line, *next;
++  char cnt[16], rej[64] = "";
++  grub_size_t rlen = 0;
++
++  if (argc != 1)
++    return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("filename expected"));
++  if (state[1].set)
++    pcr = grub_strtoul (state[1].arg, 0, 10);
++
++  /* Unsigned by design: skip the signature verifiers and measure below.  */
++  file = grub_file_open (args[0], GRUB_FILE_TYPE_CONFIG
++			 | GRUB_FILE_TYPE_SKIP_SIGNATURE);
++  if (!file)
++    return grub_errno;
++  fsize = grub_file_size (file);
++  if (fsize > MAX_FILE)
++    {
++      grub_file_close (file);
++      return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("override file too large"));
++    }
++  buf = grub_zalloc (fsize + 1);
++  if (!buf)
++    {
++      grub_file_close (file);
++      return grub_errno;
++    }
++  size = grub_file_read (file, buf, fsize);
++  grub_file_close (file);
++  if (size < 0 || (grub_off_t) size != fsize)
++    {
++      grub_free (buf);
++      return grub_error (GRUB_ERR_FILE_READ_ERROR, N_("short read"));
++    }
++
++  if (grub_tpm_present ()
++      && grub_tpm_measure ((unsigned char *) buf, size, pcr, args[0]) == GRUB_ERR_NONE)
++    measured = 1;
++  grub_errno = GRUB_ERR_NONE;
++
++  if (state[0].set && !measured)
++    {
++      grub_printf ("eve_overrides: %s not measured, nothing applied\n", args[0]);
++      grub_env_set ("eve_overrides_status", "no-tpm");
++      grub_env_export ("eve_overrides_status");
++      grub_free (buf);
++      return GRUB_ERR_NONE;
++    }
++
++  for (line = buf; line && *line; line = next)
++    {
++      char copy[MAX_LINE + 1];
++      grub_size_t len;
++
++      next = grub_strchr (line, '\n');
++      if (next)
++	*next++ = 0;
++      lineno++;
++      len = grub_strlen (line);
++      if (len <= MAX_LINE)
++	{
++	  grub_memcpy (copy, line, len + 1);
++	  if (apply_line (copy))
++	    {
++	      applied++;
++	      continue;
++	    }
++	}
++      rejected++;
++      if (measured && rejected <= MAX_REJECT_EVENTS)
++	log_rejected (lineno, line);
++      if (rlen < sizeof (rej) - 8)
++	rlen += grub_snprintf (rej + rlen, sizeof (rej) - rlen, "%s%d",
++			       rlen ? "," : "", lineno);
++      else if (rej[rlen - 1] != '.')
++	rlen += grub_snprintf (rej + rlen, sizeof (rej) - rlen, "...");
++    }
++  /* One line: the caller's config may have the pager on (rootfs.cfg does).  */
++  grub_printf ("eve_overrides: %s: %d lines accepted, %d rejected%s%s\n",
++	       args[0], applied, rejected, rejected ? ": " : "", rej);
++  grub_free (buf);
++
++  grub_snprintf (cnt, sizeof (cnt), "%d", rejected);
++  grub_env_set ("eve_overrides_rejected", cnt);
++  grub_env_export ("eve_overrides_rejected");
++  grub_env_set ("eve_overrides_status", "applied");
++  grub_env_export ("eve_overrides_status");
++  return GRUB_ERR_NONE;
++}
++
++static grub_extcmd_t cmd;
++
++GRUB_MOD_INIT(eve_overrides)
++{
++  cmd = grub_register_extcmd ("eve_overrides", grub_cmd_eve_overrides, 0,
++			      N_("[--require-tpm] [--pcr N] FILE"),
++			      N_("Apply allow-listed lines of an unsigned EVE override file."),
++			      options);
++}
++
++GRUB_MOD_FINI(eve_overrides)
++{
++  grub_unregister_extcmd (cmd);
++}
+-- 
+2.43.0
+
