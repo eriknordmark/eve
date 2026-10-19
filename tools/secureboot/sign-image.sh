@@ -42,7 +42,7 @@ printf '%s\n%s\n' \
 MODS1="part_gpt fat squash4 gptprio chain pgp gcry_rsa gcry_sha256 gcry_sha512 tpm boot reboot serial terminal"
 # pkg/grub's portable and amd64 modules, less network, loopback and filesystems
 # the boot path never reads
-MODS2="$MODS1 normal linux configfile memdisk tar gzio xzio acpi cpio crypto disk crc64 \
+MODS2="$MODS1 eve_overrides getenv normal linux configfile memdisk tar gzio xzio acpi cpio crypto disk crc64 \
 search_disk_uuid search_part_uuid search_part_label search_label video gfxterm probe regexp smbios \
 part_msdos cat echo test true measurefs efi_gop efi_uga gpt"
 mkimage() {
