@@ -90,6 +90,12 @@ jobs:
           make linuxkit
           build-tools/bin/linuxkit pkg build --platforms linux/amd64 tools/leftover-plant
           docker ps -a --filter name=linuxkit-builder
+      - name: Clear runner state
+        run: |
+          rm -rf ~/.linuxkit
+          docker rm -f linuxkit-builder || :
+          docker volume rm -f linuxkit-builder-state
+          docker system prune --all --force --volumes
       - name: Build packages
         run: |
           SUCCESS=
