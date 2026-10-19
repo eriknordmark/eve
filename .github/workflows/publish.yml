@@ -85,6 +85,11 @@ jobs:
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
         with:
           cosign-release: v3.1.3
+      - name: Plant a PR build's leftover
+        run: |
+          make linuxkit
+          build-tools/bin/linuxkit pkg build --platforms linux/amd64 tools/leftover-plant
+          docker ps -a --filter name=linuxkit-builder
       - name: Build packages
         run: |
           SUCCESS=
