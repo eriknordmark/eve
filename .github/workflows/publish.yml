@@ -46,6 +46,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    timeout-minutes: 1440
     steps:
       - name: Clear runner state
         run: |
