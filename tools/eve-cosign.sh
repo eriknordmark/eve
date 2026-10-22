@@ -259,10 +259,11 @@ sign_tag() {
 # leaves out Dockerfile.in placeholders such as XENTOOLS_TAG. A base the
 # registry does not serve is printed as its bare tag, which then fails
 # verification; bases listed in $1 themselves are skipped, since this job
-# built them and signs them after pushing.
+# built them and signs them after pushing. An empty $1 prints nothing.
 base_manifests() {
     local list="$1" name ref arch index
     shift
+    [ -s "$list" ] || return 0
     sed 's/@.*//' "$list" | sort -u | while read -r name; do
         cat "$EVE/pkg/${name#eve-}"/Dockerfile{,.in} 2>/dev/null || true
     done |
