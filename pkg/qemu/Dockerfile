@@ -24,9 +24,9 @@ ARG BUILD_PKGS_BASE="build-base meson samurai pkgconf python3 py3-setuptools py3
 # Headers and libraries of the target that QEMU and liburing build against.
 ARG TARGET_DEV_PKGS="musl-dev libgcc linux-headers glib-dev pixman-dev zlib-dev gnutls-dev \
     libusb-dev zstd-dev libaio-dev bzip2-dev libcap-ng-dev attr-dev util-linux-dev dtc-dev"
-ARG EVE_ALPINE_IMAGE=lfedge/eve-alpine:b4d0b9fe886ec5283e91da1ade3a47ed537bb47a
+ARG EVE_ALPINE_IMAGE=lfedge/eve-alpine:753a7e1767239815f1e6b65124e56c962017226d
 
-FROM lfedge/eve-uefi:3475d12ba5fd96760b956f8ea5f71aeb64069ba6 AS uefi-build
+FROM lfedge/eve-uefi:a45a45386232a8c5aa464d2f710dbfe247d0b6fc AS uefi-build
 
 # The base the scripts run on, and the Alpine libraries QEMU links.
 # hadolint ignore=DL3006
@@ -47,7 +47,7 @@ ARG BUILD_PKGS_BASE
 RUN BUILD_PKGS="${BUILD_PKGS_BASE}" eve-alpine-deploy.sh
 
 # hadolint ignore=DL3029
-FROM --platform=${BUILDPLATFORM} lfedge/eve-cross-compilers:d794c049baf50389be1dd48da056fb2472574c3e AS cross-compilers
+FROM --platform=${BUILDPLATFORM} lfedge/eve-cross-compilers:420b11425943d649316fe5c5cd5c4a2e0e2a9b3b AS cross-compilers
 
 # The target's headers and libraries, for the cross compiler's sysroot.
 # hadolint ignore=DL3006

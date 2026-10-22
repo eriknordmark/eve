@@ -80,7 +80,7 @@ FROM build-${TARGETARCH} AS build
 # than in the Ubuntu stage that knows the versions; pkgs.tsv carries them over.
 # The init-only call guarantees the DB file exists on architectures that
 # register nothing.
-FROM lfedge/eve-alpine:b4d0b9fe886ec5283e91da1ade3a47ed537bb47a AS sbom
+FROM lfedge/eve-alpine:753a7e1767239815f1e6b65124e56c962017226d AS sbom
 COPY --from=build /sbom/pkgs.tsv /pkgs.tsv
 RUN register-sbom-pkg.sh -o /sbom-out && \
     tab="$(printf '\t')" && \
