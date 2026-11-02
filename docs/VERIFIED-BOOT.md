@@ -66,6 +66,12 @@ image.
    ```
 
    This writes `installer/rootfs.img` and `live.raw` under `dist/amd64/current/`.
+   For an installer, generate `installer.raw` from the resulting `lfedge/eve`
+   image:
+
+   ```shell
+   docker run --rm -v <dir>:/out lfedge/eve:<version>-kvm-amd64 installer_raw
+   ```
 
    The rootfs then carries `/boot/initrd.img` from `pkg/verity-initrd`, and
    `rootfs.img` ends with the dm-verity tree and descriptor
@@ -84,13 +90,23 @@ image.
 3. Sign:
 
    ```shell
-   tools/secureboot/sign.sh <keys dir> <out dir> dist/amd64/current/installer/rootfs.img dist/amd64/current/live.raw
+   tools/secureboot/sign.sh <keys dir> <out dir> dist/amd64/current/installer/rootfs.img \
+       [dist/amd64/current/live.raw] [<dir>/installer.raw]
    ```
 
-   `<out dir>` receives the signed `rootfs.img`, `stage1.efi` and, when
-   `live.raw` is given, a signed `live.raw` with stage-1 alone on the ESP and
-   the signed rootfs on IMGA. `sign.sh` builds GRUB from `pkg/grub` of the same
-   tree, so run it from the tree the image was built from.
+   `<out dir>` receives the signed `rootfs.img` and `stage1.efi`, plus a signed
+   disk for each one given, recognized by its partitions:
+
+   - `live.raw`: stage-1 alone on the ESP and the signed rootfs on IMGA.
+   - `installer.raw`: stage-1 alone on the ESP, and an installer root signed
+     like the rootfs (stage-2, signed kernel, the verity initrd, signed root
+     hash) that installs the signed rootfs and puts stage-1 on the target's
+     ESP. The INSTALLER partition moves to free space when the signed root no
+     longer fits in it, keeping its GUID and attributes. The installer must
+     carry the given `rootfs.img`.
+
+   `sign.sh` builds GRUB from `pkg/grub` of the same tree, so run it from the
+   tree the image was built from.
 
 4. Enroll the db certificate in the device's firmware and turn Secure Boot on.
    A db holding only Microsoft certificates does not boot either image (no shim).
@@ -132,7 +148,8 @@ and the controller then releases the backup vault key, as for any base OS update
 
 ## Not covered yet
 
-- Installer images and arm64.
+- The installer ISO, the net installer, and arm64.
+- The installer's GRUB menu (`grub_include.cfg`) is skipped under Secure Boot.
 - Signed images without a TPM keep no `/config/grub.cfg` overrides.
 - Upgrade between signed images (IMGB) has not been tested.
 - Bounded retries before falling back to the other partition, and reporting the
