@@ -89,6 +89,13 @@ KERNEL_COMMIT=$(KERNEL_COMMIT_$(ZARCH)_$(KERNEL_VERSION)_$(KERNEL_FLAVOR))
 KERNEL_BRANCH = eve-kernel-$(ZARCH)-$(KERNEL_VERSION)-$(KERNEL_FLAVOR)
 KERNEL_DOCKER_TAG = $(KERNEL_BRANCH)-$(KERNEL_CONFIG_FLAVOR)$(KERNEL_COMMIT)-$(KERNEL_COMPILER)
 
+# TEMP: the Secure Boot test kernel (eriknordmark/eve-kernel eve-secureboot-6.18.55,
+# lf-edge/eve-kernel#299), built locally. Set here rather than on the command line,
+# which would append the kernel tag to the EVE version.
+ifeq ($(ZARCH)-$(KERNEL_CONFIG_FLAVOR),amd64-core-)
+    KERNEL_TAG ?= docker.io/lfedge/eve-kernel:eve-kernel-amd64-v6.18.55-generic-core-c97c2ef55ca6-nordmark-gcc
+endif
+
 # one can override the whole tag from the command line and set it to
 # output of make -f Makefile.eve docker-tag-${KERNEL_COMPILER} in github.com/lf-edge/eve-kernel
 KERNEL_TAG ?= docker.io/lfedge/eve-kernel:$(KERNEL_DOCKER_TAG)
