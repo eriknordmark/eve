@@ -16,6 +16,57 @@ import (
 
 const signedUpgradeVersionParamKey = "SIGNED_UPGRADE_VERSION"
 
+func signedUpgradeVersionParameter() evetest.TestParameterDefinition {
+	return evetest.TestParameterDefinition{
+		Key:          signedUpgradeVersionParamKey,
+		DefaultValue: "",
+		Description: evetest.TestParameterDescription{
+			Summary: "Local build (dist directory name) of the signed image to upgrade to",
+		},
+	}
+}
+
+// sbShell runs cmd over the device's management SSH and returns its trimmed
+// stdout.
+func sbShell(t *WithT, device *evetest.EdgeDevice, cmd string) string {
+	out, stderr, err := device.RunShellScript(cmd, shellCmdTimeout, 0)
+	t.Expect(err).ToNot(HaveOccurred(), "%q failed (stderr: %s)", cmd, stderr)
+	return strings.TrimSpace(out)
+}
+
+func sbCurpart(t *WithT, device *evetest.EdgeDevice) string {
+	return strings.TrimSpace(runInPillar(t, device, "zboot curpart"))
+}
+
+func sbPartState(t *WithT, device *evetest.EdgeDevice, part string) string {
+	return strings.TrimSpace(runInPillar(t, device, "zboot partstate "+part))
+}
+
+// sbStage1Sum returns the SHA-256 of stage-1 on ESP-A. ESP-B shares the "EFI
+// System" label, so ESP-A is found as partition 1 of the disk holding CONFIG.
+func sbStage1Sum(t *WithT, device *evetest.EdgeDevice) string {
+	out := runInPillar(t, device, "sh -c 'set -e; C=$(/sbin/findfs PARTLABEL=CONFIG); "+
+		"E=${C%[0-9]*}1; M=$(mktemp -d); mount -t vfat -o ro $E $M; "+
+		"sha256sum $M/EFI/BOOT/BOOTX64.EFI; umount $M'")
+	f := strings.Fields(out)
+	t.Expect(f).ToNot(BeEmpty(), "no checksum of stage-1 on ESP-A")
+	return f[0]
+}
+
+// expectSBVerifiedBoot checks firmware Secure Boot, lockdown and a dm-verity
+// root with signatures required on the running boot.
+func expectSBVerifiedBoot(t *WithT, device *evetest.EdgeDevice, when string) {
+	t.Expect(sbShell(t, device, "dmesg | grep -c 'Secure boot enabled' || true")).ToNot(
+		Equal("0"), "firmware must report Secure Boot enabled "+when)
+	t.Expect(sbShell(t, device, "cat /sys/kernel/security/lockdown")).To(
+		ContainSubstring("[integrity]"), "lockdown "+when)
+	// SSH lands in the debug container, which shares the host PID namespace.
+	t.Expect(sbShell(t, device, "awk '$2 == \"/\" {print $1}' /proc/1/mounts | tail -1")).To(
+		Equal("/dev/mapper/eve-root"), "root device "+when)
+	t.Expect(sbShell(t, device, "cat /sys/module/dm_verity/parameters/require_signatures")).To(
+		Equal("Y"), "dm-verity signatures required "+when)
+}
+
 // TestSecureBootSignedUpgrade upgrades a device running a signed image
 // (tools/secureboot/sign.sh) to another image signed with the same keys, with
 // firmware Secure Boot on. Stage-1 on the ESP stays as installed and must accept
@@ -40,13 +91,7 @@ func TestSecureBootSignedUpgrade(test *testing.T) {
 
 	evetest.DefineTestParameters(
 		evetest.EVEVersionParameter(),
-		evetest.TestParameterDefinition{
-			Key:          signedUpgradeVersionParamKey,
-			DefaultValue: "",
-			Description: evetest.TestParameterDescription{
-				Summary: "Local build (dist directory name) of the signed image to upgrade to",
-			},
-		},
+		signedUpgradeVersionParameter(),
 	)
 	targetVersion := evetest.GetTestParameter[string](signedUpgradeVersionParamKey)
 	if targetVersion == "" {
@@ -69,68 +114,38 @@ func TestSecureBootSignedUpgrade(test *testing.T) {
 	device := evetest.GetEdgeDevice(devName)
 	log := evetest.Logger()
 
-	sh := func(cmd string) string {
-		out, stderr, err := device.RunShellScript(cmd, shellCmdTimeout, 0)
-		t.Expect(err).ToNot(HaveOccurred(), "%q failed (stderr: %s)", cmd, stderr)
-		return strings.TrimSpace(out)
-	}
-	curpart := func() string {
-		return strings.TrimSpace(runInPillar(t, device, "zboot curpart"))
-	}
-	// ESP-B shares the "EFI System" label, so ESP-A is found as partition 1 of
-	// the disk holding CONFIG.
-	stage1Sum := func() string {
-		out := runInPillar(t, device, "sh -c 'set -e; C=$(/sbin/findfs PARTLABEL=CONFIG); "+
-			"E=${C%[0-9]*}1; M=$(mktemp -d); mount -t vfat -o ro $E $M; "+
-			"sha256sum $M/EFI/BOOT/BOOTX64.EFI; umount $M'")
-		f := strings.Fields(out)
-		t.Expect(f).ToNot(BeEmpty(), "no checksum of stage-1 on ESP-A")
-		return f[0]
-	}
-	expectVerifiedBoot := func(when string) {
-		t.Expect(sh("dmesg | grep -c 'Secure boot enabled' || true")).ToNot(Equal("0"),
-			"firmware must report Secure Boot enabled "+when)
-		t.Expect(sh("cat /sys/kernel/security/lockdown")).To(ContainSubstring("[integrity]"),
-			"lockdown "+when)
-		// SSH lands in the debug container, which shares the host PID namespace.
-		t.Expect(sh("awk '$2 == \"/\" {print $1}' /proc/1/mounts | tail -1")).To(
-			Equal("/dev/mapper/eve-root"), "root device "+when)
-		t.Expect(sh("cat /sys/module/dm_verity/parameters/require_signatures")).To(
-			Equal("Y"), "dm-verity signatures required "+when)
-	}
-
 	device.ApplyConfig(vaultMgmtPortConfig(), true, true)
 	waitForVaultOpen(t, device, evetest.FilesystemEXT4, "after onboarding")
 	settleVaultSeal(t, device, evetest.FilesystemEXT4)
 	evetest.Checkpoint("onboarded")
-	initial := sh("cat /run/eve-release")
+	initial := sbShell(t, device, "cat /run/eve-release")
 	log.Infof("running %s", initial)
 	t.Expect(initial).ToNot(HavePrefix(targetVersion),
 		"the device must start on a different image than the upgrade target")
-	t.Expect(curpart()).To(Equal("IMGA"))
-	expectVerifiedBoot("on the initial image")
-	stage1 := stage1Sum()
+	t.Expect(sbCurpart(t, device)).To(Equal("IMGA"))
+	expectSBVerifiedBoot(t, device, "on the initial image")
+	stage1 := sbStage1Sum(t, device)
 	log.Infof("stage-1 on ESP-A: %s", stage1)
 
 	device.UpgradeEVE(targetVersion, evetest.HypervisorKVM, evetest.BaseOSDatastoreHTTP,
 		true, false)
 	evetest.Checkpoint("upgrade-complete")
 	waitForVaultOpen(t, device, evetest.FilesystemEXT4, "after the upgrade")
-	upgraded := sh("cat /run/eve-release")
+	upgraded := sbShell(t, device, "cat /run/eve-release")
 	log.Infof("running %s", upgraded)
 	t.Expect(upgraded).To(HavePrefix(targetVersion))
-	t.Expect(curpart()).To(Equal("IMGB"))
-	expectVerifiedBoot("after the upgrade")
-	t.Expect(stage1Sum()).To(Equal(stage1), "the upgrade must leave stage-1 as installed")
+	t.Expect(sbCurpart(t, device)).To(Equal("IMGB"))
+	expectSBVerifiedBoot(t, device, "after the upgrade")
+	t.Expect(sbStage1Sum(t, device)).To(Equal(stage1), "the upgrade must leave stage-1 as installed")
 	st := readVaultStatus(t, device)
 	log.Infof("vault after the upgrade: unlockMethod=%d mismatchingPCRs=%v",
 		st.UnlockMethod, st.MismatchingPCRs)
-	log.Infof("partitions: %s", runInPillar(t, device,
-		"sh -c 'echo IMGA=$(zboot partstate IMGA) IMGB=$(zboot partstate IMGB)'"))
+	log.Infof("partitions: IMGA=%s IMGB=%s",
+		sbPartState(t, device, "IMGA"), sbPartState(t, device, "IMGB"))
 
 	settleVaultSeal(t, device, evetest.FilesystemEXT4)
 	evetest.Checkpoint("rebooted")
-	t.Expect(sh("cat /run/eve-release")).To(Equal(upgraded))
-	t.Expect(curpart()).To(Equal("IMGB"))
-	expectVerifiedBoot("after a reboot on the upgraded image")
+	t.Expect(sbShell(t, device, "cat /run/eve-release")).To(Equal(upgraded))
+	t.Expect(sbCurpart(t, device)).To(Equal("IMGB"))
+	expectSBVerifiedBoot(t, device, "after a reboot on the upgraded image")
 }
