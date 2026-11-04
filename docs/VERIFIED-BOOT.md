@@ -139,6 +139,23 @@ EVETEST_EVE_LIVE_IMAGE=true EVETEST_EVE_DIST_DIR=<dist> EVETEST_EVE_VERSION=<ver
     make evetest NAME=TestSecureBootOnboarded
 ```
 
+`TestSecureBootSignedUpgrade` and `TestSecureBootSignedFallback` take two such
+builds signed with the same keys: `EVETEST_EVE_VERSION` names the initial one and
+`EVETEST_SIGNED_UPGRADE_VERSION` the one the controller upgrades it to. The first
+checks that the installed stage-1 boots the new image from IMGB with verified
+boot on and is left unchanged. The second cuts power while the new image is on
+trial and checks that stage-1 falls back to the signed image on IMGA, which
+reports the new one as failed.
+
+## Upgrades and fallback
+
+Stage-1 picks IMGA or IMGB with `gptprio` and boots either one signed with the
+same keys, so a signed image upgrades to the next as an upstream one does. A new
+image that does not come up during its trial falls back to the previous signed
+image; once it commits, the other partition is `unused` and no fallback remains.
+Stage-1 enforces signatures with or without firmware Secure Boot, so it does not
+boot an unsigned image from either partition.
+
 ## PCRs and the vault
 
 Moving a device from the upstream image to the signed one changes PCR 4, 7, 8,
@@ -151,7 +168,6 @@ and the controller then releases the backup vault key, as for any base OS update
 - The installer ISO, the net installer, and arm64.
 - The installer's GRUB menu (`grub_include.cfg`) is skipped under Secure Boot.
 - Signed images without a TPM keep no `/config/grub.cfg` overrides.
-- Upgrade between signed images (IMGB) has not been tested.
 - Bounded retries before falling back to the other partition, and reporting the
   reason a verification failed to the controller.
 - Revocation of a signed release (seal policy, `dbx`) and a version for stage-1.
