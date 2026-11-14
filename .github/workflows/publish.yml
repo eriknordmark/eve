@@ -1,6 +1,10 @@
 # Copyright (c) 2025, Zededa, Inc.
 # SPDX-License-Identifier: Apache-2.0
 ---
+# FORK ONLY: publish.yml on eriknordmark/eve. lfedge packages are pulled;
+# pkg/rehearsal is pushed and signed in docker.io/eriknordmark, and the
+# FORK ONLY steps play an unsigned build pushing its tag, then check the
+# outcome ("REHEARSAL CHECK").
 name: Publish
 on:  # yamllint disable-line rule:truthy
   push:
@@ -26,7 +30,10 @@ env:
   # github.com clone this job makes.
   GITHUB_TOKEN: ${{ github.token }}
   GIT_ASKPASS: ${{ github.workspace }}/tools/github-askpass.sh
-  EVE_COSIGN_ENFORCE: ${{ vars.EVE_COSIGN_ENFORCE }}
+  EVE_COSIGN_ENFORCE: 'true'
+  EVE_PKG_PREFIX: docker.io/eriknordmark
+  EVE_COSIGN_IDENTITY_REGEXP: '^https://github\.com/eriknordmark/eve/\.github/workflows/publish\.yml@refs/heads/[0-9]+\.[0-9]+$'
+  EVE_COSIGN_REPOSITORY: eriknordmark/eve
 
 jobs:
   # ════════════════════════════════════════════════════════════════════════
@@ -35,15 +42,62 @@ jobs:
   # rebuilds any extra HV/platform-specific packages on top.
   # ════════════════════════════════════════════════════════════════════════
 
+  # FORK ONLY: a build that does not sign, with the real linuxkit, pushes
+  # pkg/rehearsal's tag before the run.
+  plant-unsigned:
+    if: github.event.repository.full_name == 'eriknordmark/eve'
+    strategy:
+      matrix:
+        include:
+          - {arch: amd64, os: ubuntu-24.04}
+          - {arch: arm64, os: ubuntu-24.04-arm}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: "FORK ONLY: log in to Docker Hub"
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+        with:
+          cosign-release: v3.1.4
+      - name: "FORK ONLY: install oras"
+        uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4  # v2.0.2
+        with:
+          version: 1.3.1
+      - name: Push the tag unsigned
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          make V=1 ZARCH="$ARCH" LINUXKIT_PKG_TARGET=push FORCE_BUILD=--force pkg/rehearsal
+      - name: "FORK ONLY: check U-plant"
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          ./tools/rehearsal/check.sh U-plant unsigned slot ${{ matrix.arch }}
+
   pkgs-amd64:
-    if: github.event.repository.full_name == 'lf-edge/eve'
-    runs-on: zededa-ubuntu-2204
+    if: github.event.repository.full_name == 'eriknordmark/eve'
+    needs: plant-unsigned
+    runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: read
       id-token: write
     timeout-minutes: 1440
     steps:
+      - name: "FORK ONLY: free disk space"
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker system prune -af
+          df -h /
       - name: Clear runner state
         run: |
           rm -rf ~/.linuxkit
@@ -69,8 +123,8 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
         with:
-          username: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
-          password: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
         with:
@@ -124,7 +178,7 @@ jobs:
           SUCCESS=
           for i in 1 2 3; do
             echo "Run attempt: $i"
-            if make -e V=1 HV=kvm ZARCH=amd64 PLATFORM=generic LINUXKIT_PKG_TARGET=push PRUNE=1 pkgs; then
+            if make -e V=1 HV=kvm ZARCH=amd64 PLATFORM=generic LINUXKIT_PKG_TARGET=push PRUNE=1 PKGS=pkg/rehearsal pkgs; then
               SUCCESS=true
               break
             fi
@@ -142,6 +196,20 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: |
           ./tools/eve-cosign.sh sign-pushed "$RUNNER_TEMP/records-pkgs"
+      - name: "FORK ONLY: install oras"
+        uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4  # v2.0.2
+        with:
+          version: 1.3.1
+      - name: "FORK ONLY: check U"
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          ./tools/rehearsal/check.sh U signed slot amd64
+      - name: "FORK ONLY: check U-archtag"
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          ./tools/rehearsal/check.sh U-archtag signed archtag amd64
       - name: Post package report
         run: |
           echo Disk usage
@@ -158,14 +226,21 @@ jobs:
           rm -rf ~/.linuxkit
 
   pkgs-arm64:
-    if: github.event.repository.full_name == 'lf-edge/eve'
-    runs-on: zededa-ubuntu-2204-arm64
+    if: github.event.repository.full_name == 'eriknordmark/eve'
+    needs: plant-unsigned
+    runs-on: ubuntu-24.04-arm
     permissions:
       actions: read
       contents: read
       id-token: write
     timeout-minutes: 1440
     steps:
+      - name: "FORK ONLY: free disk space"
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker system prune -af
+          df -h /
       - name: Clear runner state
         run: |
           rm -rf ~/.linuxkit
@@ -191,8 +266,8 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
         with:
-          username: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
-          password: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
         with:
@@ -241,7 +316,7 @@ jobs:
           SUCCESS=
           for i in 1 2 3; do
             echo "Run attempt: $i"
-            if make -e V=1 HV=kvm ZARCH=arm64 PLATFORM=generic LINUXKIT_PKG_TARGET=push PRUNE=1 pkgs; then
+            if make -e V=1 HV=kvm ZARCH=arm64 PLATFORM=generic LINUXKIT_PKG_TARGET=push PRUNE=1 PKGS=pkg/rehearsal pkgs; then
               SUCCESS=true
               break
             fi
@@ -259,6 +334,20 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: |
           ./tools/eve-cosign.sh sign-pushed "$RUNNER_TEMP/records-pkgs"
+      - name: "FORK ONLY: install oras"
+        uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4  # v2.0.2
+        with:
+          version: 1.3.1
+      - name: "FORK ONLY: check U"
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          ./tools/rehearsal/check.sh U signed slot arm64
+      - name: "FORK ONLY: check U-archtag"
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          ./tools/rehearsal/check.sh U-archtag signed archtag arm64
       - name: Post package report
         run: |
           echo Disk usage
@@ -282,7 +371,7 @@ jobs:
   # ════════════════════════════════════════════════════════════════════════
 
   eve:
-    if: github.event.repository.full_name == 'lf-edge/eve'
+    if: github.event.repository.full_name == 'eriknordmark/eve'
     needs: [pkgs-amd64, pkgs-arm64]
     runs-on: ${{ matrix.os }}
     permissions:
@@ -301,52 +390,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # amd64
-          - arch: amd64
-            hv: kvm
-            platform: "generic"
-            os: zededa-ubuntu-2204
-          - arch: amd64
-            hv: k
-            platform: "generic"
-            os: zededa-ubuntu-2204
-          - arch: amd64
-            hv: k
-            platform: "ai-generic"
-            os: zededa-ubuntu-2204
-          # arm64 generic
-          - arch: arm64
-            hv: kvm
-            platform: "generic"
-            os: zededa-ubuntu-2204-arm64
-          - arch: arm64
-            hv: k
-            platform: "generic"
-            os: zededa-ubuntu-2204-arm64
-          # arm64 nvidia
-          - arch: arm64
-            hv: kvm
-            platform: "nvidia-jp6"
-            os: zededa-ubuntu-2204-arm64
-          - arch: arm64
-            hv: kvm
-            platform: "nvidia-jp7"
-            os: zededa-ubuntu-2204-arm64
-          - arch: arm64
-            hv: k
-            platform: "nvidia-jp6"
-            os: zededa-ubuntu-2204-arm64
-          - arch: arm64
-            hv: k
-            platform: "nvidia-jp7"
-            os: zededa-ubuntu-2204-arm64
-          # riscv64 (cross-build on amd64 runner via qemu)
-          - arch: riscv64
-            hv: mini
-            platform: "generic"
-            os: zededa-ubuntu-2204
+          - {arch: amd64, hv: kvm, platform: generic, os: ubuntu-24.04}
 
     steps:
+      - name: "FORK ONLY: free disk space"
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker system prune -af
+          df -h /
       - name: Clear runner state
         run: |
           rm -rf ~/.linuxkit
@@ -374,8 +426,8 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
         with:
-          username: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
-          password: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
       # A package the registry serves without a valid signature was pushed
       # under its tag by a build that does not sign, such as an older stable
       # branch. It is rebuilt here, then pushed and signed like any other.
@@ -394,14 +446,19 @@ jobs:
             force="$force $(xargs < "$RUNNER_TEMP/unsigned")"
           fi
           echo "force=$force" >> "$GITHUB_OUTPUT"
+      - name: "FORK ONLY: log in to Docker Hub"
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
       - name: Build remaining packages
         uses: ./.github/actions/run-make
         env:
           FORCE_BUILD_PKGS: ${{ steps.rebuild.outputs.force }}
         with:
           command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=build PRUNE=1 pkgs"
-          dockerhub-token: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
-          dockerhub-account: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
+          dockerhub-token: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+          dockerhub-account: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
           clean: false
       - name: Verify package inputs
         env:
@@ -418,9 +475,9 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: ./.github/actions/run-make
         with:
-          command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=push PRUNE=1 pkgs"
-          dockerhub-token: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
-          dockerhub-account: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
+          command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=push PRUNE=1 PKGS=pkg/rehearsal pkgs"
+          dockerhub-token: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+          dockerhub-account: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
           clean: false
       - name: Fetch every attempt's record
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
@@ -434,6 +491,18 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: |
           ./tools/eve-cosign.sh sign-pushed "$RUNNER_TEMP/records-pkgs"
+      - name: "FORK ONLY: install oras"
+        uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4  # v2.0.2
+        with:
+          version: 1.3.1
+      - name: "FORK ONLY: an unsigned build pushes the tag after this run signed it"
+        run: |
+          ./tools/rehearsal/plant.sh amd64
+      - name: "FORK ONLY: check R-plant"
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          ./tools/rehearsal/check.sh R-plant unsigned slot amd64
       - name: Fetch the records of the packages job
         if: ${{ !startsWith(github.ref, 'refs/tags/') && matrix.arch != 'riscv64' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
@@ -449,12 +518,22 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: |
           ./tools/eve-cosign.sh restore "$RUNNER_TEMP/records-base" "$RUNNER_TEMP/records-pkgs"
+      - name: "FORK ONLY: check R"
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          ./tools/rehearsal/check.sh R signed slot amd64
+      - name: "FORK ONLY: check R-archtag"
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          ./tools/rehearsal/check.sh R-archtag signed archtag amd64
       - name: Build EVE
         uses: ./.github/actions/run-make
         with:
           command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=build eve"
-          dockerhub-token: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
-          dockerhub-account: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
+          dockerhub-token: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+          dockerhub-account: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
           clean: false
       - name: Verify EVE inputs
         env:
@@ -473,8 +552,8 @@ jobs:
         uses: ./.github/actions/run-make
         with:
           command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=push eve"
-          dockerhub-token: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
-          dockerhub-account: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
+          dockerhub-token: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+          dockerhub-account: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
           clean: false
       - name: Fetch every attempt's record of the EVE build
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
@@ -493,8 +572,8 @@ jobs:
         if: matrix.arch != 'riscv64'
         with:
           command: "V=1 HV=${{ matrix.hv }} ZARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }} LINUXKIT_PKG_TARGET=${{ startsWith(github.ref, 'refs/tags/') && 'build' || 'push' }} sbom collected_sources compare_sbom_collected_sources publish_sources"
-          dockerhub-token: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
-          dockerhub-account: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
+          dockerhub-token: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+          dockerhub-account: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
           clean: false
       - name: Push the release for signing
         if: startsWith(github.ref, 'refs/tags/')
@@ -523,9 +602,9 @@ jobs:
   # ════════════════════════════════════════════════════════════════════════
 
   manifest:
-    if: github.event.repository.full_name == 'lf-edge/eve'
+    if: github.event.repository.full_name == 'eriknordmark/eve'
     needs: eve
-    runs-on: zededa-ubuntu-2204
+    runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: read
@@ -545,8 +624,8 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
         with:
-          username: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
-          password: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
       - name: Fetch every job's records
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
@@ -570,10 +649,18 @@ jobs:
       - uses: ./.github/actions/run-make
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         with:
-          command: "V=1 LINUXKIT_PKG_TARGET=manifest pkgs"
-          dockerhub-token: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
-          dockerhub-account: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
+          command: "V=1 LINUXKIT_PKG_TARGET=manifest PKGS=pkg/rehearsal pkgs"
+          dockerhub-token: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
+          dockerhub-account: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
       # make above pushed every package's index, listing every arch pushed.
+      - name: "FORK ONLY: install oras"
+        uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4  # v2.0.2
+        with:
+          version: 1.3.1
+      - name: "FORK ONLY: another signing run pushes the tag and signs it 90 s later"
+        run: |
+          PLANT_OUT="$RUNNER_TEMP/p3" ./tools/rehearsal/plant.sh amd64
+          nohup bash -c "sleep 90; cosign sign --yes $(cat "$RUNNER_TEMP/p3")" > "$RUNNER_TEMP/p3-sign.log" 2>&1 &
       - name: Sign package indexes
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: |
@@ -581,6 +668,25 @@ jobs:
       - name: Verify that every package the run pushed or used is signed
         run: |
           ./tools/eve-cosign.sh audit amd64 arm64 riscv64 -- "$RUNNER_TEMP/records"
+      - name: "FORK ONLY: check W"
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          ./tools/rehearsal/check.sh W signed index
+      - name: "FORK ONLY: check final-amd64"
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          ./tools/rehearsal/check.sh final-amd64 signed slot amd64
+      - name: "FORK ONLY: check final-arm64"
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          ./tools/rehearsal/check.sh final-arm64 signed slot arm64
+      - name: "FORK ONLY: the delayed signer's log"
+        if: ${{ always() }}
+        run: |
+          cat "$RUNNER_TEMP/p3-sign.log" || :
       - name: Clean
         if: ${{ always() }}
         run: |
@@ -592,9 +698,9 @@ jobs:
   # push them; otherwise a package change is rebuilt here from source. Run
   # even if pkgs-amd64 failed, which may be after its push.
   coverage:
-    if: ${{ !cancelled() && github.event.repository.full_name == 'lf-edge/eve' }}
+    if: github.event.repository.full_name == 'fork-only/coverage-off'
     needs: pkgs-amd64
-    runs-on: zededa-ubuntu-2204
+    runs-on: ubuntu-24.04
     timeout-minutes: 1440
     steps:
       - name: Clear repository
@@ -643,9 +749,9 @@ jobs:
   # Merge the per-arch descriptors each eve job pushed into the multi-arch
   # indexes, pushed by digest.
   indexes:
-    if: ${{ (startsWith(github.ref, 'refs/tags/')) && (github.event.repository.full_name == 'lf-edge/eve') }}
+    if: ${{ (startsWith(github.ref, 'refs/tags/')) && (github.event.repository.full_name == 'eriknordmark/eve') }}
     needs: eve
-    runs-on: zededa-ubuntu-2204
+    runs-on: ubuntu-24.04
     steps:
       - uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4  # v2.0.2
         with:
@@ -653,8 +759,8 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
         with:
-          username: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
-          password: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           pattern: sign-images-eve-*
@@ -685,7 +791,7 @@ jobs:
   # Builds the release files from the pushed digests into a draft release,
   # which only collaborators can see.
   trigger_assets:
-    if: ${{ (startsWith(github.ref, 'refs/tags/')) && (github.event.repository.full_name == 'lf-edge/eve') }}
+    if: ${{ (startsWith(github.ref, 'refs/tags/')) && (github.event.repository.full_name == 'eriknordmark/eve') }}
     needs: [manifest, eve, indexes]
     permissions:
       contents: write
@@ -698,7 +804,7 @@ jobs:
       draft: true
 
   sign:
-    if: ${{ (startsWith(github.ref, 'refs/tags/')) && (github.event.repository.full_name == 'lf-edge/eve') }}
+    if: ${{ (startsWith(github.ref, 'refs/tags/')) && (github.event.repository.full_name == 'eriknordmark/eve') }}
     needs: [eve, indexes, trigger_assets]
     permissions:
       contents: read
@@ -706,13 +812,13 @@ jobs:
       issues: write
     uses: lf-edge/eve/.github/workflows/release-sign.yml@master  # zizmor: ignore[unpinned-uses] the signing identity is release-sign.yml at master
     secrets:
-      registry-username: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
-      registry-password: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
+      registry-username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+      registry-password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
 
   tag:
-    if: ${{ (startsWith(github.ref, 'refs/tags/')) && (github.event.repository.full_name == 'lf-edge/eve') }}
+    if: ${{ (startsWith(github.ref, 'refs/tags/')) && (github.event.repository.full_name == 'eriknordmark/eve') }}
     needs: sign
-    runs-on: zededa-ubuntu-2204
+    runs-on: ubuntu-24.04
     steps:
       - uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4  # v2.0.2
         with:
@@ -720,8 +826,8 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
         with:
-          username: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
-          password: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           pattern: sign-images-*
@@ -733,9 +839,9 @@ jobs:
           done
 
   release:
-    if: ${{ (startsWith(github.ref, 'refs/tags/')) && (github.event.repository.full_name == 'lf-edge/eve') }}
+    if: ${{ (startsWith(github.ref, 'refs/tags/')) && (github.event.repository.full_name == 'eriknordmark/eve') }}
     needs: [trigger_assets, tag]
-    runs-on: zededa-ubuntu-2204
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
