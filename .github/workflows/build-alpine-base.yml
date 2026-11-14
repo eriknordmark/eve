@@ -1,14 +1,17 @@
 # Copyright (c) 2026, Zededa, Inc.
 # SPDX-License-Identifier: Apache-2.0
 ---
+# FORK ONLY: rehearsal of the eve-alpine-base signing on eriknordmark/eve.
 name: Alpine base image - build and publish on demand
 on:  # yamllint disable-line rule:truthy
   workflow_dispatch:
+  push:
+    branches: [rehearse-alpine-fix, rehearse-alpine-neg]
 
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -18,12 +21,16 @@ env:
   # github.com clone this job makes.
   GITHUB_TOKEN: ${{ github.token }}
   GIT_ASKPASS: ${{ github.workspace }}/tools/github-askpass.sh
+  EVE_COSIGN_ENFORCE: 'false'
+  EVE_PKG_PREFIX: docker.io/eriknordmark
+  EVE_COSIGN_IDENTITY_REGEXP: '^https://github\.com/eriknordmark/eve/\.github/workflows/build-alpine-base\.yml@refs/heads/rehearse-alpine-(fix|neg)$'
+  EVE_COSIGN_REPOSITORY: eriknordmark/eve
 
 jobs:
   # Step 1: Build alpine-base for each arch
   build-base:
     # Only run for the default branch
-    if: github.ref_name == github.event.repository.default_branch
+    if: github.event.repository.full_name == 'eriknordmark/eve'
     permissions:
       contents: read
     strategy:
@@ -31,11 +38,9 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: zededa-ubuntu-2204
+            runner: ubuntu-24.04
           - arch: arm64
-            runner: zededa-ubuntu-2204-arm64
-          - arch: riscv64
-            runner: zededa-ubuntu-2204
+            runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -65,8 +70,8 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
         with:
-          username: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
-          password: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
       # Forced through FORCE_BUILD: on a cross build the Makefile adds --pull
       # unless FORCE_BUILD is set, and linuxkit rejects --force with --pull.
       - name: Build and push alpine-base (${{ matrix.arch }})
@@ -81,8 +86,8 @@ jobs:
   # Step 2: Create multi-arch manifest for alpine-base
   manifest-base:
     needs: build-base
-    runs-on: zededa-ubuntu-2204
-    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-24.04
+    if: github.event.repository.full_name == 'eriknordmark/eve'
     permissions:
       contents: read
       id-token: write
@@ -101,8 +106,8 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4.0.0
         with:
-          username: ${{ secrets.RELEASE_DOCKERHUB_ACCOUNT }}
-          password: ${{ secrets.RELEASE_DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_SIGN_ACCOUNT }}
+          password: ${{ secrets.DOCKERHUB_SIGN_TOKEN }}
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
         with:
@@ -114,8 +119,29 @@ jobs:
             \
             LINUXKIT_EXTRA_BUILD_ARGS="--hash ${{ needs.build-base.outputs.hash }}" \
             pkg/alpine-base
+      - name: "FORK ONLY: install oras"
+        uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4  # v2.0.2
+      - name: "FORK ONLY: a foreign push replaces the amd64 manifest before signing"
+        env:
+          HASH: ${{ needs.build-base.outputs.hash }}
+        run: |
+          echo "REHEARSAL_REF=docker.io/eriknordmark/eve-alpine-base:$HASH" >> "$GITHUB_ENV"
+          REHEARSAL_REF="docker.io/eriknordmark/eve-alpine-base:$HASH" ./tools/rehearsal/plant.sh amd64
+          REHEARSAL_REF="docker.io/eriknordmark/eve-alpine-base:$HASH" ./tools/rehearsal/check.sh F-plant unsigned slot amd64
       - name: Sign alpine-base
         env:
           HASH: ${{ needs.build-base.outputs.hash }}
         run: |
           ./tools/eve-cosign.sh sign-tags "eve-alpine-base:$HASH"
+      - name: "FORK ONLY: check F"
+        if: always()
+        continue-on-error: true
+        run: ./tools/rehearsal/check.sh F unsigned slot amd64
+      - name: "FORK ONLY: check F-index"
+        if: always()
+        continue-on-error: true
+        run: ./tools/rehearsal/check.sh F-index unsigned index
+      - name: "FORK ONLY: check B-arm64"
+        if: always()
+        continue-on-error: true
+        run: ./tools/rehearsal/check.sh B-arm64 signed slot arm64
