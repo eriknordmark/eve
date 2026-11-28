@@ -1,0 +1,10 @@
+open 0x10001
+out eve_overrides: /config/grub.cfg: 9 lines accepted, 5 rejected: 3,6,9,10,13
+ret 0
+set* dom0_console=console=tty0 console=ttyS0,115200n8
+set* dom0_extra_args= log_buf_len=4M eve_no_dirsync
+set* dom0_platform_tweaks=pcie_aspm=off pcie_port_pm=off
+set* eve_overrides_rejected=5
+set* eve_overrides_status=applied
+set* hv_dom0_mem_settings=dom0_mem=900M,max:900M
+set* timeout=3

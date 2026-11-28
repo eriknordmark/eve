@@ -1,0 +1,16 @@
+open 0x10001
+event 14 698  | /config/grub.cfg
+event 8 51 set_global dom0_extra_args "$dom0_extra_args getty" | eve_overrides: rejected line 3: set_global dom0_extra_args "$dom0_extra_args getty"
+event 8 31 set_global initrd "/initrd.img" | eve_overrides: rejected line 6: set_global initrd "/initrd.img"
+event 8 83 set_global dom0_extra_args "$dom0_extra_args eve_blackbox; set check_signatures=no" | eve_overrides: rejected line 9: set_global dom0_extra_args "$dom0_extra_args eve_blackbox; set check_signatures=no"
+event 8 64 set_global dom0_extra_args "$dom0_extra_args eve_root=/dev/sda9" | eve_overrides: rejected line 10: set_global dom0_extra_args "$dom0_extra_args eve_root=/dev/sda9"
+event 8 54 set_global dom0_extra_args "$dom0_extra_args nohz=off" | eve_overrides: rejected line 13: set_global dom0_extra_args "$dom0_extra_args nohz=off"
+out eve_overrides: /config/grub.cfg: 9 lines accepted, 5 rejected: 3,6,9,10,13
+ret 0
+set* dom0_console=console=tty0 console=ttyS0,115200n8
+set* dom0_extra_args= log_buf_len=4M eve_no_dirsync
+set* dom0_platform_tweaks=pcie_aspm=off pcie_port_pm=off
+set* eve_overrides_rejected=5
+set* eve_overrides_status=applied
+set* hv_dom0_mem_settings=dom0_mem=900M,max:900M
+set* timeout=3

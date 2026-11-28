@@ -1,0 +1,22 @@
+open 0x10001
+event 9 201  | /config/grub.cfg
+event 8 5 bad 1 | eve_overrides: rejected line 1: bad 1
+event 8 5 bad 2 | eve_overrides: rejected line 2: bad 2
+event 8 5 bad 3 | eve_overrides: rejected line 3: bad 3
+event 8 5 bad 4 | eve_overrides: rejected line 4: bad 4
+event 8 5 bad 5 | eve_overrides: rejected line 5: bad 5
+event 8 5 bad 6 | eve_overrides: rejected line 6: bad 6
+event 8 5 bad 7 | eve_overrides: rejected line 7: bad 7
+event 8 5 bad 8 | eve_overrides: rejected line 8: bad 8
+event 8 5 bad 9 | eve_overrides: rejected line 9: bad 9
+event 8 6 bad 10 | eve_overrides: rejected line 10: bad 10
+event 8 6 bad 11 | eve_overrides: rejected line 11: bad 11
+event 8 6 bad 12 | eve_overrides: rejected line 12: bad 12
+event 8 6 bad 13 | eve_overrides: rejected line 13: bad 13
+event 8 6 bad 14 | eve_overrides: rejected line 14: bad 14
+event 8 6 bad 15 | eve_overrides: rejected line 15: bad 15
+event 8 6 bad 16 | eve_overrides: rejected line 16: bad 16
+out eve_overrides: /config/grub.cfg: 0 lines accepted, 30 rejected: 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22...
+ret 0
+set* eve_overrides_rejected=30
+set* eve_overrides_status=applied

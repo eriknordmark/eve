@@ -1,0 +1,10 @@
+open 0x10001
+event 9 387  | /config/grub.cfg
+event 8 6 bad\x01\x5cx | eve_overrides: rejected line 1: bad\x01\x5cx
+event 8 300 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx | eve_overrides: rejected line 2: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...
+event 8 6 bad \xc3\xa9 | eve_overrides: rejected line 3: bad \xc3\xa9
+event 8 71 set_global dom0_extra_args "$dom0_extra_args eve_blackbox\x09init=/bin/sh" | eve_overrides: rejected line 4: set_global dom0_extra_args "$dom0_extra_args eve_blackbox\x09init=/bin/sh"
+out eve_overrides: /config/grub.cfg: 0 lines accepted, 4 rejected: 1,2,3,4
+ret 0
+set* eve_overrides_rejected=4
+set* eve_overrides_status=applied

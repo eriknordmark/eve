@@ -22,7 +22,8 @@ which of them are applied.
 | Signed, Secure Boot on, no `.sig`, no TPM | Ignored |
 
 The file is measured in every case: GRUB measures it into PCR 9 (and, when
-sourced, its commands into PCR 8), and `measure-config` extends PCR 14 with it
+sourced, its commands into PCR 8; a file `eve_overrides` refuses as too large is
+recorded in PCR 8 instead of PCR 9), and `measure-config` extends PCR 14 with it
 after boot. A changed override therefore changes the PCRs the vault key is sealed
 to and is visible in attestation.
 
@@ -51,7 +52,8 @@ also rejected if it contains a quote other than the enclosing pair, `\`, `;`, a
 `$` other than the leading self-reference, or a token containing `getty`.
 
 Limits: the file at most 64 KiB, a line at most 1024 bytes, a variable's
-resulting value at most 1024 bytes.
+resulting value at most 1024 bytes. A larger file is not read: nothing in it is
+applied, and the boot continues with the image's defaults.
 
 ## Variables
 
@@ -121,6 +123,10 @@ lines are also measured into PCR 8 with the event description
 `eve_overrides: rejected line N: TEXT` (`TEXT` escaped and truncated to 160
 characters), so they reach the controller in the TPM event log sent with
 attestation.
+
+A file over 64 KiB is refused before it is read. `eve_overrides` prints
+`error: override file too large.` and records one PCR 8 event,
+`eve_overrides: rejected file FILE: N bytes, limit 65536`.
 
 ## Open review items
 

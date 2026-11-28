@@ -1,4 +1,4 @@
-From 9a7f777fa0fa0e06d817a14bb2ade014eb13eef6 Mon Sep 17 00:00:00 2001
+From bd47fda67820ce505192679ce831088414e193c1 Mon Sep 17 00:00:00 2001
 From: eriknordmark <erik@zededa.com>
 Date: Mon, 19 Oct 2026 17:27:56 +0200
 Subject: [PATCH] commands: Add eve_overrides command
@@ -9,13 +9,14 @@ cgroup variables, with a per-parameter value grammar). It lets a GRUB that
 enforces signatures keep honoring an unsigned override file without
 executing it. The file is measured into PCR 9 before parsing; with
 --require-tpm nothing is applied unless that measurement succeeds.
-Rejected lines are recorded in the TPM event log (PCR 8).
+Rejected lines, and a file refused for exceeding 64 KiB, are recorded
+in the TPM event log (PCR 8).
 
 Signed-off-by: eriknordmark <erik@zededa.com>
 ---
  grub-core/Makefile.core.def        |   6 +
- grub-core/commands/eve_overrides.c | 786 +++++++++++++++++++++++++++++
- 2 files changed, 792 insertions(+)
+ grub-core/commands/eve_overrides.c | 796 +++++++++++++++++++++++++++++
+ 2 files changed, 802 insertions(+)
  create mode 100644 grub-core/commands/eve_overrides.c
 
 diff --git a/grub-core/Makefile.core.def b/grub-core/Makefile.core.def
@@ -34,10 +35,10 @@ index 32c29d8..9266030 100644
 +};
 diff --git a/grub-core/commands/eve_overrides.c b/grub-core/commands/eve_overrides.c
 new file mode 100644
-index 0000000..950728c
+index 0000000..d6e69b5
 --- /dev/null
 +++ b/grub-core/commands/eve_overrides.c
-@@ -0,0 +1,786 @@
+@@ -0,0 +1,796 @@
 +/* eve_overrides.c - apply allow-listed lines of an unsigned EVE override file.  */
 +/*
 + *  GRUB  --  GRand Unified Bootloader
@@ -75,7 +76,8 @@ index 0000000..950728c
 + * VAR is one of vars[] and VALUE a list of tokens from keys[], each with its
 + * own value grammar. A rejected line is skipped and recorded in the TPM event
 + * log (PCR 8). Sets eve_overrides_status (applied | no-tpm) and
-+ * eve_overrides_rejected (count).
++ * eve_overrides_rejected (count). A FILE over MAX_FILE bytes is not read, so
++ * not measured: nothing is applied and the refusal is recorded in PCR 8.
 + *
 + * The grammars keep '=', quotes and '$' out of values, and no token may
 + * contain "getty": EVE userspace matches some kernel parameters as
@@ -738,7 +740,16 @@ index 0000000..950728c
 +  fsize = grub_file_size (file);
 +  if (fsize > MAX_FILE)
 +    {
++      char desc[MAX_REJECT_DESC + 8];
++
 +      grub_file_close (file);
++      grub_snprintf (desc, sizeof (desc),
++		     "eve_overrides: rejected file %s: %llu bytes, limit %d",
++		     args[0], (unsigned long long) fsize, MAX_FILE);
++      if (grub_tpm_present ())
++	grub_tpm_measure ((unsigned char *) desc, grub_strlen (desc),
++			  GRUB_STRING_PCR, desc);
++      grub_errno = GRUB_ERR_NONE;
 +      return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("override file too large"));
 +    }
 +  buf = grub_zalloc (fsize + 1);

@@ -1,0 +1,4 @@
+open 0x10001
+out eve_overrides: /config/grub.cfg not measured, nothing applied
+ret 0
+set* eve_overrides_status=no-tpm

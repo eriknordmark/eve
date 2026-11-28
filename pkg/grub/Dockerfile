@@ -70,6 +70,11 @@ RUN git config --global user.email 'builder@projecteve.dev'
 RUN git init . && git add . && git commit -m "init"
 RUN git am /apply/patches/*
 
+# The eve_overrides parser against its case table (docs/GRUB-OVERRIDES.md).
+COPY test /test
+RUN make -C /test/eve_overrides clean check SANITIZE= \
+      SRC=/grub/grub-core/commands/eve_overrides.c
+
 RUN ./bootstrap --gnulib-srcdir=/gnulib || ./autogen.sh
 
 # hadolint ignore=SC2046
